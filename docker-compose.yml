@@ -3,7 +3,7 @@ version: "3.8"  # Using version 3.8 for improved functionality
 services:
 
   zookeeper:
-    image: confluentinc/cp-zookeeper:latest
+    image: confluentinc/cp-zookeeper:7.3.0
     container_name: zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
@@ -13,7 +13,7 @@ services:
       - kafka-network
 
   kafka:
-    image: confluentinc/cp-kafka:latest
+    image: confluentinc/cp-kafka:7.3.0
     container_name: kafka
     ports:
       - "9092:9092"
@@ -26,6 +26,12 @@ services:
       - zookeeper
     networks:
       - kafka-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9092"]
+      interval: 30s
+      retries: 5
+      start_period: 60s
+      timeout: 30s
 
   gateway:
     image: nginx:1.25-bookworm
@@ -37,6 +43,7 @@ services:
       - order-service
       - stock-service
       - payment-service
+      - kafka
     networks:
       - kafka-network
 
@@ -50,8 +57,10 @@ services:
     env_file:
       - env/order_redis.env
     depends_on:
-      - order-db
-      - kafka  # Ensure Kafka starts first
+      order-db:
+          condition: service_started
+      kafka:  # Ensure Kafka starts first
+          condition: service_healthy
     networks:
       - kafka-network
 
@@ -70,8 +79,10 @@ services:
     env_file:
       - env/stock_redis.env
     depends_on:
-      - stock-db
-      - kafka  # Ensure Kafka starts first
+      order-db:
+        condition: service_started
+      kafka: # Ensure Kafka starts first
+        condition: service_healthy # Ensure Kafka starts first
     networks:
       - kafka-network
 
@@ -90,8 +101,10 @@ services:
     env_file:
       - env/payment_redis.env
     depends_on:
-      - payment-db
-      - kafka  # Ensure Kafka starts first
+      order-db:
+        condition: service_started
+      kafka: # Ensure Kafka starts first
+        condition: service_healthy # Ensure Kafka starts first
     networks:
       - kafka-network
 

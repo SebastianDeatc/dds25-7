@@ -12,6 +12,7 @@ from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 from confluent_kafka import Producer, Consumer, KafkaException
 
+logging.basicConfig(level=logging.INFO)
 
 DB_ERROR_STR = "DB error"
 
@@ -59,26 +60,26 @@ def get_user_from_db(user_id: str) -> UserValue | None:
         abort(400, f"User: {user_id} not found!")
     return entry
 
-def start_kafka_consumer():
-    thread = threading.Thread(target=consume_kafka_events, daemon=True)
-    thread.start()
-    print("Kafka Consumer started in a separate thread.")
 def consume_kafka_events():
-    print("Kafka Consumer started...")
+    logging.info("Kafka Consumer started...")
     consumer.subscribe(['stock-event'])
 
     while True:
-        print("Polling for messages...")
-        msg = consumer.poll()
+        logging.info("Polling for messages...")
+        msg = consumer.poll(1.0)
 
         if msg is None:
-            print("No new messages...")
+            logging.info("No new messages...")
             continue
         if msg.error():
-            print(f"Kafka Consumer error: {msg.error()}")
+            logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
-        print('Received message:{}'.format(msg.value().decode('utf-8')))
+        logging.info('Received message:{}'.format(msg.value().decode('utf-8')))
+
+thread = threading.Thread(target=consume_kafka_events, daemon=True)
+thread.start()
+logging.info("Kafka Consumer started in a separate thread.")
 
 def handle_event(event):
     print(f"Received event: {event}")
@@ -146,7 +147,6 @@ def remove_credit(user_id: str, amount: int):
 
 
 if __name__ == '__main__':
-    start_kafka_consumer()
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
     gunicorn_logger = logging.getLogger('gunicorn.error')
