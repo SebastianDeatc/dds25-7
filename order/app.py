@@ -10,6 +10,7 @@ import requests
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
+from confluent_kafka import Producer, Consumer, KafkaException
 
 
 DB_ERROR_STR = "DB error"
@@ -23,6 +24,17 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
+
+KAFKA_BROKER = os.environ['KAFKA_BROKER']
+
+producer = Producer({"bootstrap.servers": KAFKA_BROKER})
+
+consumer = Consumer({
+    "bootstrap.servers":KAFKA_BROKER,
+    "group.id": "order-service-group",
+    "auto.offset.reset": "earliest"
+})
+
 
 
 def close_db_connection():
