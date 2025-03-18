@@ -19,7 +19,9 @@ KAFKA_BROKER = os.environ['KAFKA_BROKER']
 producer = Producer({'bootstrap.servers': KAFKA_BROKER})
 logging.info("Kafka producer initialized successfully.")
 
-
+admin_client = AdminClient({'bootstrap.servers': KAFKA_BROKER})
+topic = NewTopic('stock-event', num_partitions=3, replication_factor=1)
+fs = admin_client.create_topics([topic])
 
 app = Flask("stock-service")
 

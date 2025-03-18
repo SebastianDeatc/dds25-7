@@ -65,11 +65,9 @@ def consume_kafka_events():
     consumer.subscribe(['stock-event'])
 
     while True:
-        logging.info("Polling for messages...")
         msg = consumer.poll(1.0)
 
         if msg is None:
-            logging.info("No new messages...")
             continue
         if msg.error():
             logging.info(f"Kafka Consumer error: {msg.error()}")
