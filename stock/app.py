@@ -2,14 +2,33 @@ import logging
 import os
 import atexit
 import uuid
-
+import threading
 import redis
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
+from confluent_kafka import Producer, Consumer, KafkaException
+from confluent_kafka.admin import AdminClient, NewTopic
 
+logging.basicConfig(level=logging.INFO)
 
 DB_ERROR_STR = "DB error"
+
+KAFKA_BROKER = os.environ['KAFKA_BROKER']
+
+producer = Producer({'bootstrap.servers': KAFKA_BROKER})
+logging.info("Kafka producer initialized successfully.")
+
+admin_client = AdminClient({'bootstrap.servers': KAFKA_BROKER})
+topic = NewTopic('stock-event', num_partitions=3, replication_factor=1)
+fs = admin_client.create_topics([topic])
+
+consumer = Consumer({
+    "bootstrap.servers":KAFKA_BROKER,
+    "group.id": "stock-service-group",
+    "auto.offset.reset": "earliest"
+})
+
 
 app = Flask("stock-service")
 
@@ -17,7 +36,6 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
-
 
 def close_db_connection():
     db.close()
@@ -44,6 +62,24 @@ def get_item_from_db(item_id: str) -> StockValue | None:
         abort(400, f"Item: {item_id} not found!")
     return entry
 
+def consume_kafka_events():
+    logging.info("Kafka Consumer started...")
+    consumer.subscribe(['order-event'])
+
+    while True:
+        msg = consumer.poll(1.0)
+
+        if msg is None:
+            continue
+        if msg.error():
+            logging.info(f"Kafka Consumer error: {msg.error()}")
+            continue
+
+        logging.info('Received message:{}'.format(msg.value().decode('utf-8')))
+
+thread = threading.Thread(target=consume_kafka_events, daemon=True)
+thread.start()
+logging.info("Kafka Consumer started in a separate thread.")
 
 @app.post('/item/create/<price>')
 def create_item(price: int):
@@ -52,8 +88,12 @@ def create_item(price: int):
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
         db.set(key, value)
+        producer.produce('stock-event', key=key, value=f"Item {key} created".encode('utf-8'))
+        producer.flush()
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
+    except KafkaException as e:
+        abort(500, f"Kafka Error: {str(e)}")
     return jsonify({'item_id': key})
 
 

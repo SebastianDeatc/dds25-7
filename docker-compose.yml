@@ -1,5 +1,37 @@
-version: "3"
+version: "3.8"  # Using version 3.8 for improved functionality
+
 services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+    networks:
+      - kafka-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+    networks:
+      - kafka-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9092"]
+      interval: 30s
+      retries: 5
+      start_period: 60s
+      timeout: 30s
 
   gateway:
     image: nginx:1.25-bookworm
@@ -11,44 +43,77 @@ services:
       - order-service
       - stock-service
       - payment-service
+      - kafka
+    networks:
+      - kafka-network
 
   order-service:
     build: ./order
     image: order:latest
     environment:
       - GATEWAY_URL=http://gateway:80
+      - KAFKA_BROKER=kafka:9092  # Kafka broker environment variable
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
     env_file:
       - env/order_redis.env
     depends_on:
-      - order-db
+      order-db:
+          condition: service_started
+      kafka:  # Ensure Kafka starts first
+          condition: service_healthy
+    networks:
+      - kafka-network
 
   order-db:
     image: redis:7.2-bookworm
     command: redis-server --requirepass redis --maxmemory 512mb
+    networks:
+      - kafka-network
 
   stock-service:
     build: ./stock
     image: stock:latest
+    environment:
+      - KAFKA_BROKER=kafka:9092  # Kafka broker environment variable
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
     env_file:
       - env/stock_redis.env
     depends_on:
-      - stock-db
+      order-db:
+        condition: service_started
+      kafka: # Ensure Kafka starts first
+        condition: service_healthy # Ensure Kafka starts first
+    networks:
+      - kafka-network
 
   stock-db:
     image: redis:7.2-bookworm
     command: redis-server --requirepass redis --maxmemory 512mb
+    networks:
+      - kafka-network
 
   payment-service:
     build: ./payment
     image: user:latest
+    environment:
+      - KAFKA_BROKER=kafka:9092  # Kafka broker environment variable
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
     env_file:
       - env/payment_redis.env
     depends_on:
-      - payment-db
+      order-db:
+        condition: service_started
+      kafka: # Ensure Kafka starts first
+        condition: service_healthy # Ensure Kafka starts first
+    networks:
+      - kafka-network
 
   payment-db:
     image: redis:7.2-bookworm
     command: redis-server --requirepass redis --maxmemory 512mb
+    networks:
+      - kafka-network
+
+networks:
+  kafka-network:
+    driver: bridge  # Explicitly defining the bridge network for communication between services
