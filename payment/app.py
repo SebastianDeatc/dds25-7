@@ -119,6 +119,15 @@ def find_user(user_id: str):
         }
     )
 
+@app.post('/has_funds/<user_id>/<amount>')
+def has_credit(user_id: str, amount: int) -> bool:
+    user_entry: UserValue = get_user_from_db(user_id)
+    if user_entry.credit >= amount:
+        pass
+    pass 
+    #NOTE: ignore this for now, is for checking funds in checkout flow but is unfinished
+        
+
 
 @app.post('/add_funds/<user_id>/<amount>')
 def add_credit(user_id: str, amount: int):

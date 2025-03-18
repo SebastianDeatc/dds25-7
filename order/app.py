@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import atexit
@@ -96,6 +97,83 @@ logging.info("Kafka Consumer started in a separate thread.")
 #     producer.produce('order-stock-event', value=)
 #     producer.flush()
 
+@app.post('/checkout_check/<order_id>')
+def checkout_check_phase(order_id):
+
+    order_entry: OrderValue = get_order_from_db(order_id)
+    items_quantities = get_items_quantities(order_entry=order_entry)
+
+    check_stock_event = {
+        "order_id": order_id,
+        "items": items_quantities,
+    }
+    check_balance_event = {
+        "order_id": order_id,
+        "user_id": order_entry.user_id,
+        "total_cost": order_entry.total_cost
+    }
+    try:
+        producer.produce(
+            topic=os_topic.name,
+            key=msgpack.encode(order_id),
+            value=msgpack.encode(json.dumps(check_stock_event)),
+        )
+        producer.flush()
+        app.logger.info("CheckStockEvent produced for order %s", order_id)
+
+        producer.produce(
+            topic=op_topic.name,
+            key=msgpack.encode(order_id),
+            value=msgpack.encode(json.dumps(check_balance_event)),
+        )
+        producer.flush()
+        app.logger.info("CheckPaymentEvent produced for order %s", order_id)
+
+    except Exception as e:
+            abort(500, f"Error producing Kafka events: {str(e)}")
+    else:
+        stock_confirmed = False
+        money_confirmed = False
+        while True:
+            msg = consumer.poll(1.0)
+            if msg is None:
+                continue
+            if msg.error():
+                app.logger.error(f"Consumer error: {msg.error()}")
+                continue
+            msg_value = json.loads(msgpack.decode(msg.value()))
+            
+            match msg.topic():
+                case os_topic.name:
+                    if msg_value["status"] == "STOCK_AVAILABLE":
+                        app.logger.info(f"Stock available for order: {order_id}")
+                        stock_confirmed = True
+                        #TODO: lock stock
+                        if stock_confirmed and money_confirmed:
+                            pass
+                            #TODO: proceed with payment 
+                            break
+                    elif msg_value["status"] == "STOCK_UNAVAILABLE":
+                        app.logger.info(f"Stock unavailable for order: {order_id}")
+                        stock_confirmed = False
+                        #TODO: rollback checkout or something
+                        break
+                case op_topic.name:
+                    if msg_value["status"] == "MONEY_AVAILABLE":
+                        app.logger.info(f"Money available for order: {order_id}")
+                        money_confirmed = True
+                        if stock_confirmed and money_confirmed:
+                            pass
+                            #TODO: proceed with payment
+                            break
+                    elif msg_value["status"] == "MONEY_UNAVAILABLE":
+                        app.logger.info(f"Money unavailable for order: {order_id}")
+                        money_confirmed = False
+                        #TODO: rollback checkout or something
+                        break
+        #TODO: producer and consumer in stock and payment for checking + testing
+        consumer.close()
+
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
     key = str(uuid.uuid4())
@@ -188,17 +266,20 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
     for item_id, quantity in removed_items:
         send_post_request(f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}")
 
-
-@app.post('/checkout/<order_id>')
-def checkout(order_id: str):
-    app.logger.debug(f"Checking out {order_id}")
-    order_entry: OrderValue = get_order_from_db(order_id)
+def get_items_quantities(order_entry: OrderValue) -> dict[str, int]:
     # get the quantity per item
     items_quantities: dict[str, int] = defaultdict(int)
     for item_id, quantity in order_entry.items:
         items_quantities[item_id] += quantity
+    return items_quantities
+
+@app.post('/checkout/<order_id>') #NOTE this should probably decorate kafka checkout_phase()
+def checkout(order_id: str):
+    order_entry: OrderValue = get_order_from_db(order_id)
+    items_quantities = get_items_quantities(order_entry=order_entry)
     # The removed items will contain the items that we already have successfully subtracted stock from
     # for rollback purposes.
+    
     removed_items: list[tuple[str, int]] = []
     for item_id, quantity in items_quantities.items():
         stock_reply = send_post_request(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
