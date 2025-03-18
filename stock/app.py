@@ -64,18 +64,39 @@ def get_item_from_db(item_id: str) -> StockValue | None:
 
 def consume_kafka_events():
     logging.info("Kafka Consumer started...")
-    consumer.subscribe(['order-event'])
+    consumer.subscribe(['stock-event'])
 
     while True:
         msg = consumer.poll(1.0)
-
         if msg is None:
             continue
         if msg.error():
             logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
-        logging.info('Received message:{}'.format(msg.value().decode('utf-8')))
+        event = msg.value().decode('utf-8')
+        logging.info(f"Received event: {event}")
+        action, item_id, amount = event.split(':')
+        amount = int(amount)
+
+        if action == 'reserve':
+            item_entry = get_item_from_db(item_id)
+            if item_entry.stock < amount:
+                producer.produce('order-event', key=item_id, value=f"stock:{item_id}:failed".encode('utf-8'))
+            else:
+                item_entry.stock -= amount
+                db.set(item_id, msgpack.encode(item_entry))
+                producer.produce('order-event', key=item_id, value=f"stock:{item_id}:reserved".encode('utf-8'))
+        elif action == 'unreserve':
+            item_entry = get_item_from_db(item_id)
+            item_entry.stock += amount
+            db.set(item_id, msgpack.encode(item_entry))
+        elif action == 'subtract':
+            item_entry = get_item_from_db(item_id)
+            item_entry.stock -= amount
+            db.set(item_id, msgpack.encode(item_entry))
+
+        producer.flush()
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
 thread.start()
@@ -88,12 +109,8 @@ def create_item(price: int):
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
         db.set(key, value)
-        producer.produce('stock-event', key=key, value=f"Item {key} created".encode('utf-8'))
-        producer.flush()
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    except KafkaException as e:
-        abort(500, f"Kafka Error: {str(e)}")
     return jsonify({'item_id': key})
 
 

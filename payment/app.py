@@ -65,18 +65,39 @@ def get_user_from_db(user_id: str) -> UserValue | None:
 
 def consume_kafka_events():
     logging.info("Kafka Consumer started...")
-    consumer.subscribe(['order-event'])
+    consumer.subscribe(['payment-event'])
 
     while True:
         msg = consumer.poll(1.0)
-
         if msg is None:
             continue
         if msg.error():
             logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
-        logging.info('Received message:{}'.format(msg.value().decode('utf-8')))
+        event = msg.value().decode('utf-8')
+        logging.info(f"Received event: {event}")  # Add this line to log the received event
+        action, user_id, amount = event.split(':')
+        amount = int(amount)
+
+        if action == 'reserve':
+            user_entry = get_user_from_db(user_id)
+            if user_entry.credit < amount:
+                producer.produce('order-event', key=user_id, value=f"payment:{user_id}:failed".encode('utf-8'))
+            else:
+                user_entry.credit -= amount
+                db.set(user_id, msgpack.encode(user_entry))
+                producer.produce('order-event', key=user_id, value=f"payment:{user_id}:reserved".encode('utf-8'))
+        elif action == 'unreserve':
+            user_entry = get_user_from_db(user_id)
+            user_entry.credit += amount
+            db.set(user_id, msgpack.encode(user_entry))
+        elif action == 'pay':
+            user_entry = get_user_from_db(user_id)
+            user_entry.credit -= amount
+            db.set(user_id, msgpack.encode(user_entry))
+
+        producer.flush()
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
 thread.start()

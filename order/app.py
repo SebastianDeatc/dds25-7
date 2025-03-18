@@ -14,6 +14,7 @@ from flask import Flask, jsonify, abort, Response
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
+logging.basicConfig(level=logging.INFO)
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
@@ -72,7 +73,7 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
 
 def consume_kafka_events():
     logging.info("Kafka Consumer started...")
-    consumer.subscribe(['stock-event', 'payment-event'])
+    consumer.subscribe(['order-event'])
 
     while True:
         msg = consumer.poll(1.0)
@@ -136,7 +137,7 @@ def find_order(order_id: str):
             "paid": order_entry.paid,
             "items": order_entry.items,
             "user_id": order_entry.user_id,
-            "total_cost": order_entry.total_cost
+            "total_cost": order_entry.total_cost,
         }
     )
 
@@ -186,25 +187,67 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
 def checkout(order_id: str):
     app.logger.debug(f"Checking out {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
-    # get the quantity per item
     items_quantities: dict[str, int] = defaultdict(int)
     for item_id, quantity in order_entry.items:
         items_quantities[item_id] += quantity
-    # The removed items will contain the items that we already have successfully subtracted stock from
-    # for rollback purposes.
-    removed_items: list[tuple[str, int]] = []
+
+    # Publish stock reservation events
     for item_id, quantity in items_quantities.items():
-        stock_reply = send_post_request(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
-        if stock_reply.status_code != 200:
-            # If one item does not have enough stock we need to rollback
-            rollback_stock(removed_items)
-            abort(400, f'Out of stock on item_id: {item_id}')
-        removed_items.append((item_id, quantity))
-    user_reply = send_post_request(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
-    if user_reply.status_code != 200:
-        # If the user does not have enough credit we need to rollback all the item stock subtractions
-        rollback_stock(removed_items)
-        abort(400, "User out of credit")
+        producer.produce('stock-event', key=item_id, value=f"reserve:{item_id}:{quantity}".encode('utf-8'))
+    producer.flush()
+
+    # Publish funds reservation event
+    producer.produce('payment-event', key=order_entry.user_id, value=f"reserve:{order_entry.user_id}:{order_entry.total_cost}".encode('utf-8'))
+    producer.flush()
+
+    # Wait for responses from Stock and Payment Services
+    reserved_items = []
+    reserved_funds = False
+
+    while True:
+        msg = consumer.poll(1.0)
+        if msg is None:
+            continue
+        if msg.error():
+            logging.info(f"Kafka Consumer error: {msg.error()}")
+            continue
+
+        event = msg.value().decode('utf-8')
+        event_type, entity_id, status = event.split(':')
+        
+        if event_type == 'stock' and status == 'reserved':
+            reserved_items.append(entity_id)
+        elif event_type == 'stock' and status == 'failed':
+            # Rollback previously reserved items
+            for item_id in reserved_items:
+                producer.produce('stock-event', key=item_id, value=f"unreserve:{item_id}".encode('utf-8'))
+            producer.flush()
+            # Unreserve funds
+            producer.produce('payment-event', key=order_entry.user_id, value=f"unreserve:{order_entry.user_id}:{order_entry.total_cost}".encode('utf-8'))
+            producer.flush()
+            abort(400, f"Failed to reserve stock for item: {entity_id}")
+        
+        if event_type == 'payment' and status == 'reserved':
+            reserved_funds = True
+        elif event_type == 'payment' and status == 'failed':
+            # Rollback previously reserved items
+            for item_id in reserved_items:
+                producer.produce('stock-event', key=item_id, value=f"unreserve:{item_id}".encode('utf-8'))
+            producer.flush()
+            abort(400, f"Failed to reserve funds for user: {entity_id}")
+
+        if len(reserved_items) == len(items_quantities) and reserved_funds:
+            break
+
+    # # Publish stock subtraction events
+    # for item_id, quantity in items_quantities.items():
+    #     producer.produce('stock-event', key=item_id, value=f"subtract:{item_id}:{quantity}".encode('utf-8'))
+    # producer.flush()
+
+    # # Publish payment deduction event
+    # producer.produce('payment-event', key=order_entry.user_id, value=f"pay:{order_entry.user_id}:{order_entry.total_cost}".encode('utf-8'))
+    # producer.flush()
+
     order_entry.paid = True
     try:
         db.set(order_id, msgpack.encode(order_entry))
