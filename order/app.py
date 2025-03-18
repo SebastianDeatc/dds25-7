@@ -14,6 +14,7 @@ from flask import Flask, jsonify, abort, Response
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
+logging.basicConfig(level=logging.INFO)
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
@@ -24,8 +25,9 @@ producer = Producer({'bootstrap.servers': KAFKA_BROKER})
 logging.info("Kafka producer initialized successfully.")
 
 admin_client = AdminClient({'bootstrap.servers': KAFKA_BROKER})
-topic = NewTopic('order-event', num_partitions=3, replication_factor=1)
-fs = admin_client.create_topics([topic])
+os_topic = NewTopic('order-stock-event', num_partitions=3, replication_factor=1)
+op_topic = NewTopic('order-payment-event', num_partitions=3, replication_factor=1)
+fs = admin_client.create_topics([os_topic, op_topic])
 
 consumer = Consumer({
     "bootstrap.servers":KAFKA_BROKER,
@@ -88,6 +90,11 @@ def consume_kafka_events():
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
 thread.start()
 logging.info("Kafka Consumer started in a separate thread.")
+
+# def update_phase():
+#     update_stock_event = {}
+#     producer.produce('order-stock-event', value=)
+#     producer.flush()
 
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
