@@ -3,6 +3,7 @@ import os
 import atexit
 import random
 import uuid
+import threading
 from collections import defaultdict
 
 import redis
@@ -11,10 +12,26 @@ import requests
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 from confluent_kafka import Producer, Consumer, KafkaException
+from confluent_kafka.admin import AdminClient, NewTopic
 
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
+
+KAFKA_BROKER = os.environ['KAFKA_BROKER']
+
+producer = Producer({'bootstrap.servers': KAFKA_BROKER})
+logging.info("Kafka producer initialized successfully.")
+
+admin_client = AdminClient({'bootstrap.servers': KAFKA_BROKER})
+topic = NewTopic('order-event', num_partitions=3, replication_factor=1)
+fs = admin_client.create_topics([topic])
+
+consumer = Consumer({
+    "bootstrap.servers":KAFKA_BROKER,
+    "group.id": "order-service-group",
+    "auto.offset.reset": "earliest"
+})
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
 
@@ -24,17 +41,6 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
-
-KAFKA_BROKER = os.environ['KAFKA_BROKER']
-
-producer = Producer({"bootstrap.servers": KAFKA_BROKER})
-
-consumer = Consumer({
-    "bootstrap.servers":KAFKA_BROKER,
-    "group.id": "order-service-group",
-    "auto.offset.reset": "earliest"
-})
-
 
 
 def close_db_connection():
@@ -64,6 +70,24 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
         abort(400, f"Order: {order_id} not found!")
     return entry
 
+def consume_kafka_events():
+    logging.info("Kafka Consumer started...")
+    consumer.subscribe(['stock-event', 'payment-event'])
+
+    while True:
+        msg = consumer.poll(1.0)
+
+        if msg is None:
+            continue
+        if msg.error():
+            logging.info(f"Kafka Consumer error: {msg.error()}")
+            continue
+
+        logging.info('Received message:{}'.format(msg.value().decode('utf-8')))
+
+thread = threading.Thread(target=consume_kafka_events, daemon=True)
+thread.start()
+logging.info("Kafka Consumer started in a separate thread.")
 
 @app.post('/create/<user_id>')
 def create_order(user_id: str):

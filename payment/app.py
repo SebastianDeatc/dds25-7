@@ -11,22 +11,20 @@ import json
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 from confluent_kafka import Producer, Consumer, KafkaException
+from confluent_kafka.admin import AdminClient, NewTopic
 
 logging.basicConfig(level=logging.INFO)
 
 DB_ERROR_STR = "DB error"
 
-
-app = Flask("payment-service")
-
-db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-                              port=int(os.environ['REDIS_PORT']),
-                              password=os.environ['REDIS_PASSWORD'],
-                              db=int(os.environ['REDIS_DB']))
-
 KAFKA_BROKER = os.environ['KAFKA_BROKER']
 
-producer = Producer({"bootstrap.servers": KAFKA_BROKER})
+producer = Producer({'bootstrap.servers': KAFKA_BROKER})
+logging.info("Kafka producer initialized successfully.")
+
+admin_client = AdminClient({'bootstrap.servers': KAFKA_BROKER})
+topic = NewTopic('payment-event', num_partitions=3, replication_factor=1)
+fs = admin_client.create_topics([topic])
 
 consumer = Consumer({
     "bootstrap.servers":KAFKA_BROKER,
@@ -34,7 +32,12 @@ consumer = Consumer({
     "auto.offset.reset": "earliest"
 })
 
+app = Flask("payment-service")
 
+db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
+                              port=int(os.environ['REDIS_PORT']),
+                              password=os.environ['REDIS_PASSWORD'],
+                              db=int(os.environ['REDIS_DB']))
 
 def close_db_connection():
     db.close()
@@ -62,7 +65,7 @@ def get_user_from_db(user_id: str) -> UserValue | None:
 
 def consume_kafka_events():
     logging.info("Kafka Consumer started...")
-    consumer.subscribe(['stock-event'])
+    consumer.subscribe(['order-event'])
 
     while True:
         msg = consumer.poll(1.0)

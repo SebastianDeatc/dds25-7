@@ -2,7 +2,7 @@ import logging
 import os
 import atexit
 import uuid
-import time
+import threading
 import redis
 
 from msgspec import msgpack, Struct
@@ -22,6 +22,13 @@ logging.info("Kafka producer initialized successfully.")
 admin_client = AdminClient({'bootstrap.servers': KAFKA_BROKER})
 topic = NewTopic('stock-event', num_partitions=3, replication_factor=1)
 fs = admin_client.create_topics([topic])
+
+consumer = Consumer({
+    "bootstrap.servers":KAFKA_BROKER,
+    "group.id": "stock-service-group",
+    "auto.offset.reset": "earliest"
+})
+
 
 app = Flask("stock-service")
 
@@ -54,6 +61,25 @@ def get_item_from_db(item_id: str) -> StockValue | None:
         # if item does not exist in the database; abort
         abort(400, f"Item: {item_id} not found!")
     return entry
+
+def consume_kafka_events():
+    logging.info("Kafka Consumer started...")
+    consumer.subscribe(['order-event'])
+
+    while True:
+        msg = consumer.poll(1.0)
+
+        if msg is None:
+            continue
+        if msg.error():
+            logging.info(f"Kafka Consumer error: {msg.error()}")
+            continue
+
+        logging.info('Received message:{}'.format(msg.value().decode('utf-8')))
+
+thread = threading.Thread(target=consume_kafka_events, daemon=True)
+thread.start()
+logging.info("Kafka Consumer started in a separate thread.")
 
 @app.post('/item/create/<price>')
 def create_item(price: int):
