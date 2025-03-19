@@ -65,7 +65,7 @@ def get_user_from_db(user_id: str) -> UserValue | None:
 
 def consume_kafka_events():
     logging.info("Kafka Consumer started...")
-    consumer.subscribe(['order-event'])
+    consumer.subscribe(['order-payment-event'])
 
     while True:
         msg = consumer.poll(1.0)
@@ -76,14 +76,20 @@ def consume_kafka_events():
             logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
-        logging.info('Received message:{}'.format(msg.value().decode('utf-8')))
+        event = json.loads(msg.value().decode('utf-8'))
+        logging.info(f'Received message:{event}')
+        handle_event(event)
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
 thread.start()
 logging.info("Kafka Consumer started in a separate thread.")
 
 def handle_event(event):
-    print(f"Received event: {event}")
+    event_type = event.get('event_type')
+    if event_type == "update_balance":
+        user_id = event.get('user_id')
+        amount = event.get('amount')
+        remove_credit(user_id, amount)
 
 @app.post('/create_user')
 def create_user():

@@ -4,6 +4,7 @@ import atexit
 import uuid
 import threading
 import redis
+import json
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
@@ -64,7 +65,7 @@ def get_item_from_db(item_id: str) -> StockValue | None:
 
 def consume_kafka_events():
     logging.info("Kafka Consumer started...")
-    consumer.subscribe(['order-event'])
+    consumer.subscribe(['order-stock-event'])
 
     while True:
         msg = consumer.poll(1.0)
@@ -75,11 +76,21 @@ def consume_kafka_events():
             logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
-        logging.info('Received message:{}'.format(msg.value().decode('utf-8')))
+        event = json.loads(msg.value().decode('utf-8'))
+        logging.info(f'Received message:{event}')
+        handle_event(event)
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
 thread.start()
 logging.info("Kafka Consumer started in a separate thread.")
+
+def handle_event(event):
+    event_type = event.get('event_type')
+    if event_type == "update_stock":
+        item_id = event.get('item_id')
+        amount = event.get('amount')
+        remove_stock(item_id, amount)
+
 
 @app.post('/item/create/<price>')
 def create_item(price: int):
@@ -88,8 +99,6 @@ def create_item(price: int):
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
         db.set(key, value)
-        producer.produce('stock-event', key=key, value=f"Item {key} created".encode('utf-8'))
-        producer.flush()
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
     except KafkaException as e:
