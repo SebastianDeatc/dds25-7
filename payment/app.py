@@ -48,6 +48,7 @@ atexit.register(close_db_connection)
 
 class UserValue(Struct):
     credit: int
+    reserved: int  # Add this field to keep track of reserved funds
 
 
 def get_user_from_db(user_id: str) -> UserValue | None:
@@ -76,26 +77,52 @@ def consume_kafka_events():
             continue
 
         event = msg.value().decode('utf-8')
-        logging.info(f"Received event: {event}")  # Add this line to log the received event
+        logging.info(f"Received event: {event}")
         action, user_id, amount = event.split(':')
         amount = int(amount)
 
         if action == 'reserve':
-            user_entry = get_user_from_db(user_id)
-            if user_entry.credit < amount:
-                producer.produce('order-event', key=user_id, value=f"payment:{user_id}:failed".encode('utf-8'))
-            else:
-                user_entry.credit -= amount
-                db.set(user_id, msgpack.encode(user_entry))
-                producer.produce('order-event', key=user_id, value=f"payment:{user_id}:reserved".encode('utf-8'))
+            while True:
+                user_entry = get_user_from_db(user_id)
+                if user_entry.credit - user_entry.reserved < amount:
+                    producer.produce('order-event', key=user_id, value=f"payment:{user_id}:failed".encode('utf-8'))
+                    break
+                user_entry.reserved += amount
+                try:
+                    db.watch(user_id)  # Watch the key
+                    db.multi()  # Start the transaction
+                    db.set(user_id, msgpack.encode(user_entry))  # Update the reserved credit
+                    db.execute()  # Execute the transaction
+                    producer.produce('order-event', key=user_id, value=f"payment:{user_id}:reserved".encode('utf-8'))
+                    break
+                except redis.exceptions.WatchError:
+                    continue  # Retry if the watched key was modified by another transaction
         elif action == 'unreserve':
+            user_entry = get_user_from_db(user_id)
+            user_entry.reserved -= amount
+            db.set(user_id, msgpack.encode(user_entry))
+        elif action == 'pay':
+            while True:
+                user_entry = get_user_from_db(user_id)
+                if user_entry.credit < amount:
+                    producer.produce('order-event', key=user_id, value=f"payment:{user_id}:failed".encode('utf-8'))
+                    break
+                user_entry.credit -= amount
+                user_entry.reserved -= amount
+                try:
+                    db.watch(user_id)  # Watch the key
+                    db.multi()  # Start the transaction
+                    db.set(user_id, msgpack.encode(user_entry))  # Update the credit
+                    db.execute()  # Execute the transaction
+                    producer.produce('order-event', key=user_id, value=f"payment:{user_id}:paid".encode('utf-8'))
+                    break
+                except redis.exceptions.WatchError:
+                    continue  # Retry if the watched key was modified by another transaction
+        elif action == 'refund':
             user_entry = get_user_from_db(user_id)
             user_entry.credit += amount
             db.set(user_id, msgpack.encode(user_entry))
-        elif action == 'pay':
-            user_entry = get_user_from_db(user_id)
-            user_entry.credit -= amount
-            db.set(user_id, msgpack.encode(user_entry))
+            producer.produce('order-event', key=user_id, value=f"payment:{user_id}:refunded".encode('utf-8'))
 
         producer.flush()
 
@@ -109,7 +136,7 @@ def handle_event(event):
 @app.post('/create_user')
 def create_user():
     key = str(uuid.uuid4())
-    value = msgpack.encode(UserValue(credit=0))
+    value = msgpack.encode(UserValue(credit=0, reserved=0))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
@@ -121,7 +148,7 @@ def create_user():
 def batch_init_users(n: int, starting_money: int):
     n = int(n)
     starting_money = int(starting_money)
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money))
+    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money, reserved=0))
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)
@@ -136,7 +163,8 @@ def find_user(user_id: str):
     return jsonify(
         {
             "user_id": user_id,
-            "credit": user_entry.credit
+            "credit": user_entry.credit,
+            "reserved": user_entry.reserved
         }
     )
 

@@ -46,6 +46,7 @@ atexit.register(close_db_connection)
 
 class StockValue(Struct):
     stock: int
+    reserved: int  # Add this field to keep track of reserved stock
     price: int
 
 
@@ -80,21 +81,47 @@ def consume_kafka_events():
         amount = int(amount)
 
         if action == 'reserve':
-            item_entry = get_item_from_db(item_id)
-            if item_entry.stock < amount:
-                producer.produce('order-event', key=item_id, value=f"stock:{item_id}:failed".encode('utf-8'))
-            else:
-                item_entry.stock -= amount
-                db.set(item_id, msgpack.encode(item_entry))
-                producer.produce('order-event', key=item_id, value=f"stock:{item_id}:reserved".encode('utf-8'))
+            while True:
+                item_entry = get_item_from_db(item_id)
+                if item_entry.stock - item_entry.reserved < amount:
+                    producer.produce('order-event', key=item_id, value=f"stock:{item_id}:failed".encode('utf-8'))
+                    break
+                item_entry.reserved += amount
+                try:
+                    db.watch(item_id)  # Watch the key
+                    db.multi()  # Start the transaction
+                    db.set(item_id, msgpack.encode(item_entry))  # Update the reserved stock
+                    db.execute()  # Execute the transaction
+                    producer.produce('order-event', key=item_id, value=f"stock:{item_id}:reserved".encode('utf-8'))
+                    break
+                except redis.exceptions.WatchError:
+                    continue  # Retry if the watched key was modified by another transaction
         elif action == 'unreserve':
+            item_entry = get_item_from_db(item_id)
+            item_entry.reserved -= amount
+            db.set(item_id, msgpack.encode(item_entry))
+        elif action == 'subtract':
+            while True:
+                item_entry = get_item_from_db(item_id)
+                if item_entry.stock < amount:
+                    producer.produce('order-event', key=item_id, value=f"stock:{item_id}:failed".encode('utf-8'))
+                    break
+                item_entry.stock -= amount
+                item_entry.reserved -= amount
+                try:
+                    db.watch(item_id)  # Watch the key
+                    db.multi()  # Start the transaction
+                    db.set(item_id, msgpack.encode(item_entry))  # Update the stock
+                    db.execute()  # Execute the transaction
+                    producer.produce('order-event', key=item_id, value=f"stock:{item_id}:subtracted".encode('utf-8'))
+                    break
+                except redis.exceptions.WatchError:
+                    continue  # Retry if the watched key was modified by another transaction
+        elif action == 'add':
             item_entry = get_item_from_db(item_id)
             item_entry.stock += amount
             db.set(item_id, msgpack.encode(item_entry))
-        elif action == 'subtract':
-            item_entry = get_item_from_db(item_id)
-            item_entry.stock -= amount
-            db.set(item_id, msgpack.encode(item_entry))
+            producer.produce('order-event', key=item_id, value=f"stock:{item_id}:added".encode('utf-8'))
 
         producer.flush()
 
@@ -106,7 +133,7 @@ logging.info("Kafka Consumer started in a separate thread.")
 def create_item(price: int):
     key = str(uuid.uuid4())
     app.logger.debug(f"Item: {key} created")
-    value = msgpack.encode(StockValue(stock=0, price=int(price)))
+    value = msgpack.encode(StockValue(stock=0, reserved=0, price=int(price)))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
@@ -119,7 +146,7 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
     n = int(n)
     starting_stock = int(starting_stock)
     item_price = int(item_price)
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, price=item_price))
+    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, reserved=0, price=item_price))
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)

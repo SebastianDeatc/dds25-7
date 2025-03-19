@@ -214,7 +214,7 @@ def checkout(order_id: str):
 
         event = msg.value().decode('utf-8')
         event_type, entity_id, status = event.split(':')
-        
+
         if event_type == 'stock' and status == 'reserved':
             reserved_items.append(entity_id)
         elif event_type == 'stock' and status == 'failed':
@@ -226,7 +226,7 @@ def checkout(order_id: str):
             producer.produce('payment-event', key=order_entry.user_id, value=f"unreserve:{order_entry.user_id}:{order_entry.total_cost}".encode('utf-8'))
             producer.flush()
             abort(400, f"Failed to reserve stock for item: {entity_id}")
-        
+
         if event_type == 'payment' and status == 'reserved':
             reserved_funds = True
         elif event_type == 'payment' and status == 'failed':
@@ -239,14 +239,53 @@ def checkout(order_id: str):
         if len(reserved_items) == len(items_quantities) and reserved_funds:
             break
 
-    # # Publish stock subtraction events
-    # for item_id, quantity in items_quantities.items():
-    #     producer.produce('stock-event', key=item_id, value=f"subtract:{item_id}:{quantity}".encode('utf-8'))
-    # producer.flush()
+    # Publish stock subtraction events
+    for item_id, quantity in items_quantities.items():
+        producer.produce('stock-event', key=item_id, value=f"subtract:{item_id}:{quantity}".encode('utf-8'))
+    producer.flush()
 
-    # # Publish payment deduction event
-    # producer.produce('payment-event', key=order_entry.user_id, value=f"pay:{order_entry.user_id}:{order_entry.total_cost}".encode('utf-8'))
-    # producer.flush()
+    # Publish payment deduction event
+    producer.produce('payment-event', key=order_entry.user_id, value=f"pay:{order_entry.user_id}:{order_entry.total_cost}".encode('utf-8'))
+    producer.flush()
+
+    # Wait for subtraction and payment confirmations
+    subtracted_items = []
+    payment_confirmed = False
+
+    while True:
+        msg = consumer.poll(1.0)
+        if msg is None:
+            continue
+        if msg.error():
+            logging.info(f"Kafka Consumer error: {msg.error()}")
+            continue
+
+        event = msg.value().decode('utf-8')
+        event_type, entity_id, status = event.split(':')
+
+        if event_type == 'stock' and status == 'subtracted':
+            subtracted_items.append(entity_id)
+        elif event_type == 'stock' and status == 'failed':
+            # Rollback previously subtracted items
+            for item_id in subtracted_items:
+                producer.produce('stock-event', key=item_id, value=f"add:{item_id}:{items_quantities[item_id]}".encode('utf-8'))
+            producer.flush()
+            # Refund payment
+            producer.produce('payment-event', key=order_entry.user_id, value=f"refund:{order_entry.user_id}:{order_entry.total_cost}".encode('utf-8'))
+            producer.flush()
+            abort(400, f"Failed to subtract stock for item: {entity_id}")
+
+        if event_type == 'payment' and status == 'paid':
+            payment_confirmed = True
+        elif event_type == 'payment' and status == 'failed':
+            # Rollback previously subtracted items
+            for item_id in subtracted_items:
+                producer.produce('stock-event', key=item_id, value=f"add:{item_id}:{items_quantities[item_id]}".encode('utf-8'))
+            producer.flush()
+            abort(400, f"Failed to deduct payment for user: {entity_id}")
+
+        if len(subtracted_items) == len(items_quantities) and payment_confirmed:
+            break
 
     order_entry.paid = True
     try:
