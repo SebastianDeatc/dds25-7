@@ -89,10 +89,11 @@ def consume_kafka_events():
                     break
                 user_entry.reserved += amount
                 try:
-                    db.watch(user_id)  # Watch the key
-                    db.multi()  # Start the transaction
-                    db.set(user_id, msgpack.encode(user_entry))  # Update the reserved credit
-                    db.execute()  # Execute the transaction
+                    with db.pipeline() as pipe:
+                        pipe.watch(user_id)  # Watch the key
+                        pipe.multi()  # Start the transaction
+                        pipe.set(user_id, msgpack.encode(user_entry))  # Update the reserved credit
+                        pipe.execute()  # Execute the transaction
                     producer.produce('order-event', key=user_id, value=f"payment:{user_id}:reserved".encode('utf-8'))
                     break
                 except redis.exceptions.WatchError:
@@ -110,10 +111,11 @@ def consume_kafka_events():
                 user_entry.credit -= amount
                 user_entry.reserved -= amount
                 try:
-                    db.watch(user_id)  # Watch the key
-                    db.multi()  # Start the transaction
-                    db.set(user_id, msgpack.encode(user_entry))  # Update the credit
-                    db.execute()  # Execute the transaction
+                    with db.pipeline() as pipe:
+                        pipe.watch(user_id)  # Watch the key
+                        pipe.multi()  # Start the transaction
+                        pipe.set(user_id, msgpack.encode(user_entry))  # Update the credit
+                        pipe.execute()  # Execute the transaction
                     producer.produce('order-event', key=user_id, value=f"payment:{user_id}:paid".encode('utf-8'))
                     break
                 except redis.exceptions.WatchError:
