@@ -4,9 +4,11 @@ import atexit
 import uuid
 import threading
 import redis
+import json
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
+from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
@@ -65,7 +67,7 @@ def get_item_from_db(item_id: str) -> StockValue | None:
 
 def consume_kafka_events():
     logging.info("Kafka Consumer started...")
-    consumer.subscribe(['stock-event'])
+    consumer.subscribe(['order-stock-event'])
 
     while True:
         msg = consumer.poll(1.0)
@@ -75,61 +77,57 @@ def consume_kafka_events():
             logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
-        event = msg.value().decode('utf-8')
-        logging.info(f"Received event: {event}")
-        action, item_id, amount = event.split(':')
-        amount = int(amount)
-
-        if action == 'reserve':
-            while True:
-                item_entry = get_item_from_db(item_id)
-                if item_entry.stock - item_entry.reserved < amount:
-                    producer.produce('order-event', key=item_id, value=f"stock:{item_id}:failed".encode('utf-8'))
-                    break
-                item_entry.reserved += amount
-                try:
-                    with db.pipeline() as pipe:
-                        pipe.watch(item_id)  # Watch the key
-                        pipe.multi()  # Start the transaction
-                        pipe.set(item_id, msgpack.encode(item_entry))  # Update the reserved stock
-                        pipe.execute()  # Execute the transaction
-                    producer.produce('order-event', key=item_id, value=f"stock:{item_id}:reserved".encode('utf-8'))
-                    break
-                except redis.exceptions.WatchError:
-                    continue  # Retry if the watched key was modified by another transaction
-        elif action == 'unreserve':
-            item_entry = get_item_from_db(item_id)
-            item_entry.reserved -= amount
-            db.set(item_id, msgpack.encode(item_entry))
-        elif action == 'subtract':
-            while True:
-                item_entry = get_item_from_db(item_id)
-                if item_entry.stock < amount:
-                    producer.produce('order-event', key=item_id, value=f"stock:{item_id}:failed".encode('utf-8'))
-                    break
-                item_entry.stock -= amount
-                item_entry.reserved -= amount
-                try:
-                    with db.pipeline() as pipe:
-                        pipe.watch(item_id)  # Watch the key
-                        pipe.multi()  # Start the transaction
-                        pipe.set(item_id, msgpack.encode(item_entry))  # Update the stock
-                        pipe.execute()  # Execute the transaction
-                    producer.produce('order-event', key=item_id, value=f"stock:{item_id}:subtracted".encode('utf-8'))
-                    break
-                except redis.exceptions.WatchError:
-                    continue  # Retry if the watched key was modified by another transaction
-        elif action == 'add':
-            item_entry = get_item_from_db(item_id)
-            item_entry.stock += amount
-            db.set(item_id, msgpack.encode(item_entry))
-            producer.produce('order-event', key=item_id, value=f"stock:{item_id}:added".encode('utf-8'))
-
-        producer.flush()
+        event = json.loads(msg.value().decode('utf-8'))
+        logging.info(f'Received message:{event}')
+        handle_event(event)
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
 thread.start()
 logging.info("Kafka Consumer started in a separate thread.")
+
+def handle_event(event):
+    event_type = event.get('event_type')
+    item_id = event.get('item_id')
+    amount = event.get('amount')
+    if event_type == "update_stock":
+        try:
+            remove_stock(item_id, amount)
+        except HTTPException:
+            update_stock_fail_event = {
+                "event_type": "update_stock_fail",
+                "item_id": item_id,
+                "amount": amount
+            }
+            update_stock_ack_message = json.dumps(update_stock_fail_event).encode('utf-8')
+        else:
+            update_stock_ack_event = {
+                "event_type": "update_stock_ack",
+                "item_id": item_id,
+                "amount": amount
+            }
+            update_stock_ack_message = json.dumps(update_stock_ack_event).encode('utf-8')
+        producer.produce('order-payment-event', value=update_stock_ack_message)
+        producer.flush()
+    elif event_type == "rollback_stock":
+        try:
+            add_stock(item_id, amount)
+        except HTTPException:
+            rollback_stock_fail_event = {
+                "event_type": "rollback_stock_fail",
+                "item_id": item_id,
+                "amount": amount
+            }
+            rollback_stock_ack_message = json.dumps(rollback_stock_fail_event).encode('utf-8')
+        else:
+            rollback_stock_ack_event = {
+                "event_type": "rollback_stock_ack",
+                "item_id": item_id,
+                "amount": amount
+            }
+            rollback_stock_ack_message = json.dumps(rollback_stock_ack_event).encode('utf-8')
+        producer.produce('order-payment-event', value=rollback_stock_ack_message)
+        producer.flush()
+
 
 @app.post('/item/create/<price>')
 def create_item(price: int):

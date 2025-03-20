@@ -4,6 +4,7 @@ import atexit
 import random
 import uuid
 import threading
+import json
 from collections import defaultdict
 import time
 import redis
@@ -25,8 +26,9 @@ producer = Producer({'bootstrap.servers': KAFKA_BROKER})
 logging.info("Kafka producer initialized successfully.")
 
 admin_client = AdminClient({'bootstrap.servers': KAFKA_BROKER})
-topic = NewTopic('order-event', num_partitions=3, replication_factor=1)
-fs = admin_client.create_topics([topic])
+os_topic = NewTopic('order-stock-event', num_partitions=3, replication_factor=1)
+op_topic = NewTopic('order-payment-event', num_partitions=3, replication_factor=1)
+fs = admin_client.create_topics([os_topic, op_topic])
 
 consumer = Consumer({
     "bootstrap.servers":KAFKA_BROKER,
@@ -99,6 +101,49 @@ message_queue = Queue()
 thread = threading.Thread(target=consume_kafka_events, args=(message_queue,), daemon=True)
 thread.start()
 logging.info("Kafka Consumer started in a separate thread.")
+
+def update_phase(item_id, user_id, amount_stock, amount_balance):
+    update_stock_event = {
+    "event_type": "update_stock",
+    "item_id": item_id,
+    "amount": amount_stock
+    }
+    update_stock_event_message = json.dumps(update_stock_event).encode('utf-8')
+
+    update_balance_event = {
+        "event_type": "update_balance",
+        "user_id": user_id,
+        "amount": amount_balance
+    }
+    update_balance_event_message = json.dumps(update_balance_event).encode('utf-8')
+
+    producer.produce('order-stock-event', value=update_stock_event_message)
+    producer.produce('order-payment-event', value=update_balance_event_message)
+    producer.flush()
+
+def update_stock(item_id, amount_stock):
+    update_stock_event = {
+    "event_type": "update_stock",
+    "item_id": item_id,
+    "amount": amount_stock
+    }
+    producer.produce('order-stock-event', value=json.dumps(update_stock_event))
+    producer.flush()
+
+def update_balance(user_id, amount_balance):
+    update_balance_event = {
+        "event_type": "update_balance",
+        "user_id": user_id,
+        "amount": amount_balance
+    }
+    producer.produce('order-payment-event', value=json.dumps(update_balance_event))
+    producer.flush()
+
+
+@app.post('/test/<item_id>/<user_id>/<amount_stock>/<amount_balance>')
+def test(item_id: str, user_id:str, amount_stock: str, amount_balance: str):
+    update_phase(item_id, user_id, amount_stock, amount_balance)
+    return jsonify({"message": "ok"}), 200
 
 @app.post('/create/<user_id>')
 def create_order(user_id: str):

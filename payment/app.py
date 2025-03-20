@@ -10,6 +10,7 @@ import json
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
+from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
@@ -66,7 +67,7 @@ def get_user_from_db(user_id: str) -> UserValue | None:
 
 def consume_kafka_events():
     logging.info("Kafka Consumer started...")
-    consumer.subscribe(['payment-event'])
+    consumer.subscribe(['order-payment-event'])
 
     while True:
         msg = consumer.poll(1.0)
@@ -76,64 +77,56 @@ def consume_kafka_events():
             logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
-        event = msg.value().decode('utf-8')
-        logging.info(f"Received event: {event}")
-        action, user_id, amount = event.split(':')
-        amount = int(amount)
-
-        if action == 'reserve':
-            while True:
-                user_entry = get_user_from_db(user_id)
-                if user_entry.credit - user_entry.reserved < amount:
-                    producer.produce('order-event', key=user_id, value=f"payment:{user_id}:failed".encode('utf-8'))
-                    break
-                user_entry.reserved += amount
-                try:
-                    with db.pipeline() as pipe:
-                        pipe.watch(user_id)  # Watch the key
-                        pipe.multi()  # Start the transaction
-                        pipe.set(user_id, msgpack.encode(user_entry))  # Update the reserved credit
-                        pipe.execute()  # Execute the transaction
-                    producer.produce('order-event', key=user_id, value=f"payment:{user_id}:reserved".encode('utf-8'))
-                    break
-                except redis.exceptions.WatchError:
-                    continue  # Retry if the watched key was modified by another transaction
-        elif action == 'unreserve':
-            user_entry = get_user_from_db(user_id)
-            user_entry.reserved -= amount
-            db.set(user_id, msgpack.encode(user_entry))
-        elif action == 'pay':
-            while True:
-                user_entry = get_user_from_db(user_id)
-                if user_entry.credit < amount:
-                    producer.produce('order-event', key=user_id, value=f"payment:{user_id}:failed".encode('utf-8'))
-                    break
-                user_entry.credit -= amount
-                user_entry.reserved -= amount
-                try:
-                    with db.pipeline() as pipe:
-                        pipe.watch(user_id)  # Watch the key
-                        pipe.multi()  # Start the transaction
-                        pipe.set(user_id, msgpack.encode(user_entry))  # Update the credit
-                        pipe.execute()  # Execute the transaction
-                    producer.produce('order-event', key=user_id, value=f"payment:{user_id}:paid".encode('utf-8'))
-                    break
-                except redis.exceptions.WatchError:
-                    continue  # Retry if the watched key was modified by another transaction
-        elif action == 'refund':
-            user_entry = get_user_from_db(user_id)
-            user_entry.credit += amount
-            db.set(user_id, msgpack.encode(user_entry))
-            producer.produce('order-event', key=user_id, value=f"payment:{user_id}:refunded".encode('utf-8'))
-
-        producer.flush()
+        event = json.loads(msg.value().decode('utf-8'))
+        logging.info(f'Received message:{event}')
+        handle_event(event)
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
 thread.start()
 logging.info("Kafka Consumer started in a separate thread.")
 
 def handle_event(event):
-    print(f"Received event: {event}")
+    event_type = event.get('event_type')
+    user_id = event.get('user_id')
+    amount = event.get('amount')
+    if event_type == "update_balance":
+        try:
+            remove_credit(user_id, amount)
+        except HTTPException:
+            update_balance_fail_event = {
+                "event_type": "update_balance_fail",
+                "user_id": user_id,
+                "amount": amount
+            }
+            update_balance_ack_message = json.dumps(update_balance_fail_event).encode('utf-8')
+        else:
+            update_balance_ack_event = {
+                "event_type": "update_balance_ack",
+                "user_id": user_id,
+                "amount": amount
+            }
+            update_balance_ack_message = json.dumps(update_balance_ack_event).encode('utf-8')
+        producer.produce('order-payment-event', value=update_balance_ack_message)
+        producer.flush()
+    elif event_type == "refund_balance":
+        try:
+            add_credit(user_id, amount)
+        except HTTPException:
+            refund_balance_fail_event = {
+                "event_type": "refund_balance_fail",
+                "user_id": user_id,
+                "amount": amount
+            }
+            refund_balance_ack_message = json.dumps(refund_balance_fail_event).encode('utf-8')
+        else:
+            refund_balance_ack_event = {
+                "event_type": "refund_balance_ack",
+                "user_id": user_id,
+                "amount": amount
+            }
+            refund_balance_ack_message = json.dumps(refund_balance_ack_event).encode('utf-8')
+        producer.produce('order-payment-event', value=refund_balance_ack_message)
+        producer.flush()
 
 @app.post('/create_user')
 def create_user():
