@@ -10,6 +10,7 @@ import json
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
+from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
@@ -86,10 +87,46 @@ logging.info("Kafka Consumer started in a separate thread.")
 
 def handle_event(event):
     event_type = event.get('event_type')
+    user_id = event.get('user_id')
+    amount = event.get('amount')
     if event_type == "update_balance":
-        user_id = event.get('user_id')
-        amount = event.get('amount')
-        remove_credit(user_id, amount)
+        try:
+            remove_credit(user_id, amount)
+        except HTTPException:
+            update_balance_fail_event = {
+                "event_type": "update_balance_fail",
+                "user_id": user_id,
+                "amount": amount
+            }
+            update_balance_ack_message = json.dumps(update_balance_fail_event).encode('utf-8')
+        else:
+            update_balance_ack_event = {
+                "event_type": "update_balance_ack",
+                "user_id": user_id,
+                "amount": amount
+            }
+            update_balance_ack_message = json.dumps(update_balance_ack_event).encode('utf-8')
+        producer.produce('order-payment-event', value=update_balance_ack_message)
+        producer.flush()
+    elif event_type == "refund_balance":
+        try:
+            add_credit(user_id, amount)
+        except HTTPException:
+            refund_balance_fail_event = {
+                "event_type": "refund_balance_fail",
+                "user_id": user_id,
+                "amount": amount
+            }
+            refund_balance_ack_message = json.dumps(refund_balance_fail_event).encode('utf-8')
+        else:
+            refund_balance_ack_event = {
+                "event_type": "refund_balance_ack",
+                "user_id": user_id,
+                "amount": amount
+            }
+            refund_balance_ack_message = json.dumps(refund_balance_ack_event).encode('utf-8')
+        producer.produce('order-payment-event', value=refund_balance_ack_message)
+        producer.flush()
 
 @app.post('/create_user')
 def create_user():

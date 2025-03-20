@@ -111,6 +111,23 @@ def update_phase(item_id, user_id, amount_stock, amount_balance):
     producer.produce('order-payment-event', value=update_balance_event_message)
     producer.flush()
 
+def update_stock(item_id, amount_stock):
+    update_stock_event = {
+    "event_type": "update_stock",
+    "item_id": item_id,
+    "amount": amount_stock
+    }
+    producer.produce('order-stock-event', value=json.dumps(update_stock_event))
+    producer.flush()
+
+def update_balance(user_id, amount_balance):
+    update_balance_event = {
+        "event_type": "update_balance",
+        "user_id": user_id,
+        "amount": amount_balance
+    }
+    producer.produce('order-payment-event', value=json.dumps(update_balance_event))
+    producer.flush()
 
 
 @app.post('/test/<item_id>/<user_id>/<amount_stock>/<amount_balance>')
