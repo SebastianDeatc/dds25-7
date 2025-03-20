@@ -77,7 +77,7 @@ def consume_kafka_events():
             logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
-        event = json.loads(msg.value().decode('utf-8'))
+        event = json.loads(msgpack.decode(msg.value()))
         logging.info(f'Received message:{event}')
         handle_event(event)
 
@@ -87,9 +87,10 @@ logging.info("Kafka Consumer started in a separate thread.")
 
 def handle_event(event):
     event_type = event.get('event_type')
+    order_id = event.get('order_id')
     user_id = event.get('user_id')
     amount = event.get('amount')
-    if event_type == "update_balance":
+    if event_type == "payment":
         try:
             remove_credit(user_id, amount)
         except HTTPException:
@@ -98,15 +99,15 @@ def handle_event(event):
                 "user_id": user_id,
                 "amount": amount
             }
-            update_balance_ack_message = json.dumps(update_balance_fail_event).encode('utf-8')
+            update_balance_ack_message = msgpack.encode(json.dumps(update_balance_fail_event))
         else:
-            update_balance_ack_event = {
-                "event_type": "update_balance_ack",
+            update_balance_success_event = {
+                "event_type": "update_balance_success",
                 "user_id": user_id,
                 "amount": amount
             }
-            update_balance_ack_message = json.dumps(update_balance_ack_event).encode('utf-8')
-        producer.produce('order-payment-event', value=update_balance_ack_message)
+            update_balance_ack_message = msgpack.encode(json.dumps(update_balance_success_event))
+        producer.produce('order-payment-event', key = order_id, value=update_balance_ack_message)
         producer.flush()
     elif event_type == "refund_balance":
         try:
@@ -117,15 +118,15 @@ def handle_event(event):
                 "user_id": user_id,
                 "amount": amount
             }
-            refund_balance_ack_message = json.dumps(refund_balance_fail_event).encode('utf-8')
+            refund_balance_ack_message = msgpack.encode(json.dumps(refund_balance_fail_event))
         else:
-            refund_balance_ack_event = {
-                "event_type": "refund_balance_ack",
+            refund_balance_success_event = {
+                "event_type": "refund_balance_success",
                 "user_id": user_id,
                 "amount": amount
             }
-            refund_balance_ack_message = json.dumps(refund_balance_ack_event).encode('utf-8')
-        producer.produce('order-payment-event', value=refund_balance_ack_message)
+            refund_balance_ack_message = msgpack.encode(json.dumps(refund_balance_success_event))
+        producer.produce('order-payment-event', key = order_id, value=refund_balance_ack_message)
         producer.flush()
 
 @app.post('/create_user')
