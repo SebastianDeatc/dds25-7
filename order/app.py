@@ -5,7 +5,7 @@ import random
 import uuid
 import threading
 from collections import defaultdict
-
+import time
 import redis
 import requests
 
@@ -76,17 +76,21 @@ def consume_kafka_events(message_queue):
     consumer.subscribe(['order-event'])
 
     while True:
-        msg = consumer.poll(1.0)
+        try:
+            msg = consumer.poll(5.0)  # Increase poll timeout to 5 seconds
 
-        if msg is None:
-            continue
-        if msg.error():
-            logging.info(f"Kafka Consumer error: {msg.error()}")
-            continue
+            if msg is None:
+                continue
+            if msg.error():
+                logging.info(f"Kafka Consumer error: {msg.error()}")
+                continue
 
-        event = msg.value().decode('utf-8')
-        logging.info(f"Received message: {event}")
-        message_queue.put(event)
+            event = msg.value().decode('utf-8')
+            logging.info(f"Received message: {event}")
+            message_queue.put(event)
+        except Exception as e:
+            logging.error(f"Error in Kafka consumer: {e}")
+            continue
 
 # Start the Kafka consumer thread
 from queue import Queue
@@ -166,7 +170,6 @@ def send_get_request(url: str):
         return response
 
 
-
 @app.post('/addItem/<order_id>/<item_id>/<quantity>')
 def add_item(order_id: str, item_id: str, quantity: int):
     order_entry: OrderValue = get_order_from_db(order_id)
@@ -189,7 +192,6 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
     for item_id, quantity in removed_items:
         send_post_request(f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}")
 
-
 @app.post('/checkout/<order_id>')
 def checkout(order_id: str):
     app.logger.debug(f"Checking out {order_id}")
@@ -210,9 +212,24 @@ def checkout(order_id: str):
     # Wait for responses from Stock and Payment Services
     reserved_items = []
     reserved_funds = False
+    timeout = 30  # Timeout in seconds
+    start_time = time.time()
+
+    consumer.subscribe(['order-event'])
 
     while True:
-        event = message_queue.get()
+        msg = consumer.poll(1.0)  # Use a shorter poll timeout
+
+        if msg is None:
+            if time.time() - start_time > timeout:
+                logging.error("Timeout waiting for reservation events")
+                abort(400, "Timeout waiting for reservation events")
+            continue
+        if msg.error():
+            logging.info(f"Kafka Consumer error: {msg.error()}")
+            continue
+
+        event = msg.value().decode('utf-8')
         event_type, entity_id, status = event.split(':')
         logging.debug(f"Received event: {event}")
 
@@ -257,9 +274,21 @@ def checkout(order_id: str):
     # Wait for subtraction and payment confirmations
     subtracted_items = []
     payment_confirmed = False
+    start_time = time.time()
 
     while True:
-        event = message_queue.get()
+        msg = consumer.poll(1.0)  # Use a shorter poll timeout
+
+        if msg is None:
+            if time.time() - start_time > timeout:
+                logging.error("Timeout waiting for subtraction and payment events")
+                abort(400, "Timeout waiting for subtraction and payment events")
+            continue
+        if msg.error():
+            logging.info(f"Kafka Consumer error: {msg.error()}")
+            continue
+
+        event = msg.value().decode('utf-8')
         event_type, entity_id, status = event.split(':')
         logging.debug(f"Received event: {event}")
 
