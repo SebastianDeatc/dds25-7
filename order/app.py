@@ -108,7 +108,7 @@ def handle_event(event):
                 'user_id': user_id,
                 'amount': order_entry.total_cost
             }
-            producer.produce('payment-event', key = order_id, value = msgpack.encode(json.dumps(payment_event)))
+            producer.produce('order-payment-event', key = order_id, value = msgpack.encode(json.dumps(payment_event)))
         else:
             # Rollback the reserved stock / unlock
             abort(400, f"Failed to reserve stock")
@@ -124,7 +124,7 @@ def handle_event(event):
             'user_id': user_id,
             'amount': order_entry.total_cost
         }
-        producer.produce('payment-event', key = order_id, value = msgpack.encode(json.dumps(refund_event)))
+        producer.produce('order-payment-event', key = order_id, value = msgpack.encode(json.dumps(refund_event)))
     elif event_type == 'refund_balance_success':
         abort(400, f"Not enough balance! Refunded your order")
 
@@ -416,10 +416,10 @@ def checkout(order_id: str):
                 "user_id": order_entry.user_id,
                 "items": items_quantities
     }
-    producer.produce('stock-event', key=order_id, value=msgpack.encode(json.dumps(check_stock_event)))
+    producer.produce('order-stock-event', key=order_id, value=msgpack.encode(json.dumps(check_stock_event)))
     producer.flush()
 
-    #TODO find some way to return here
+    return 'OK'
 
 
 if __name__ == '__main__':

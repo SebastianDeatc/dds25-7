@@ -107,7 +107,7 @@ def handle_event(event):
                 "amount": amount
             }
             update_balance_ack_message = msgpack.encode(json.dumps(update_balance_success_event))
-        producer.produce('order-payment-event', key = order_id, value=update_balance_ack_message)
+        producer.produce('payment-event', key = order_id, value=update_balance_ack_message)
         producer.flush()
     elif event_type == "refund_balance":
         try:
@@ -126,7 +126,7 @@ def handle_event(event):
                 "amount": amount
             }
             refund_balance_ack_message = msgpack.encode(json.dumps(refund_balance_success_event))
-        producer.produce('order-payment-event', key = order_id, value=refund_balance_ack_message)
+        producer.produce('payment-event', key = order_id, value=refund_balance_ack_message)
         producer.flush()
 
 @app.post('/create_user')

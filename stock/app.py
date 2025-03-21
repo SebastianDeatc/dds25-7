@@ -95,7 +95,7 @@ def handle_event(event):
         success = True
         for item_id, quantity in items.items():
             if success:
-                stock = find_item(item_id).json().get('stock')
+                stock = get_item_from_db(item_id).stock
                 available = stock - quantity > 0
                 if available:
                     logging.info(f"Locking item: {item_id}")
