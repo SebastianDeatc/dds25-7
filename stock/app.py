@@ -89,22 +89,58 @@ def handle_event(event):
     event_type = event.get('event_type')
     order_id = event.get('order_id')
     user_id = event.get('user_id')
+    # if event_type == "check_stock":
+    #     items = event.get('items')
+    #     success = True
+    #     for item_id, quantity in items.items():
+    #         if success:
+    #             stock = get_item_from_db(item_id).stock
+    #             available = stock - quantity > 0
+    #             if available:
+    #                 logging.info(f"Locking item: {item_id}")
+    #                 #TODO: lock
+    #             else:
+    #                 logging.info(f"Item {item_id} not available")
+    #                 #TODO: release locks
+    #                 success = False
+    #                 break
+
+    #     check_stock_ack = {
+    #         "event_type": "check_stock_ack",
+    #         "order_id": order_id,
+    #         "user_id": user_id,
+    #         "success": success
+    #     }
+    #     producer.produce('stock-event', key= order_id, value=msgpack.encode(json.dumps(check_stock_ack)))
+    #     producer.flush()
     if event_type == "check_stock":
         items = event.get('items')
-        success = True
-        for item_id, quantity in items.items():
-            if success:
-                stock = get_item_from_db(item_id).stock
-                available = stock - quantity > 0
-                if available:
-                    logging.info(f"Locking item: {item_id}")
-                    #TODO: lock
-                else:
-                    logging.info(f"Item {item_id} not available")
-                    #TODO: release locks
-                    success = False
-                    break
+        logging.info(f"items: {items}, type: {type(items)}")
 
+        lua_script = """
+                        local items = cjson.decode(ARGV[1])
+                        local items_new_amount = {}
+                        for item_id, amount in pairs(items) do
+                            local stock_obj = cmsgpack.unpack(redis.call('GET', item_id))
+                            if not stock_obj then
+                                return {false, "Item ID not found: " .. item_id}
+                            end
+                            local stock = tonumber(stock_obj.stock)
+                            if not stock or stock < amount then
+                                return {false, "Not enough stock for item: " .. item_id}
+                            end
+                            stock_obj.stock = stock - amount
+                            items_new_amount[item_id] = stock_obj
+                        end
+                        for item_id, stock_obj in pairs(items_new_amount) do
+                            redis.call('SET', item_id, cmsgpack.pack(stock_obj))
+                        end
+                        return {true, "Stock updated successfully"}
+                        """
+
+        result = db.eval(lua_script, 0, json.dumps(items))
+        success = result[0] == 1
+        logging.info(f"result: {result}")
         check_stock_ack = {
             "event_type": "check_stock_ack",
             "order_id": order_id,
@@ -113,46 +149,6 @@ def handle_event(event):
         }
         producer.produce('stock-event', key= order_id, value=msgpack.encode(json.dumps(check_stock_ack)))
         producer.flush()
-
-
-    # if event_type == "update_stock":
-    #     try:
-    #         remove_stock(item_id, amount)
-    #     except HTTPException:
-    #         update_stock_fail_event = {
-    #             "event_type": "update_stock_fail",
-    #             "item_id": item_id,
-    #             "amount": amount
-    #         }
-    #         update_stock_ack_message = json.dumps(update_stock_fail_event).encode('utf-8')
-    #     else:
-    #         update_stock_ack_event = {
-    #             "event_type": "update_stock_ack",
-    #             "item_id": item_id,
-    #             "amount": amount
-    #         }
-    #         update_stock_ack_message = json.dumps(update_stock_ack_event).encode('utf-8')
-    #     producer.produce('order-payment-event', value=update_stock_ack_message)
-    #     producer.flush()
-    # elif event_type == "rollback_stock":
-    #     try:
-    #         add_stock(item_id, amount)
-    #     except HTTPException:
-    #         rollback_stock_fail_event = {
-    #             "event_type": "rollback_stock_fail",
-    #             "item_id": item_id,
-    #             "amount": amount
-    #         }
-    #         rollback_stock_ack_message = json.dumps(rollback_stock_fail_event).encode('utf-8')
-    #     else:
-    #         rollback_stock_ack_event = {
-    #             "event_type": "rollback_stock_ack",
-    #             "item_id": item_id,
-    #             "amount": amount
-    #         }
-    #         rollback_stock_ack_message = json.dumps(rollback_stock_ack_event).encode('utf-8')
-    #     producer.produce('order-payment-event', value=rollback_stock_ack_message)
-    #     producer.flush()
 
 
 @app.post('/item/create/<price>')
