@@ -47,8 +47,7 @@ atexit.register(close_db_connection)
 
 
 class StockValue(Struct):
-    stock: int
-    reserved: int  # Add this field to keep track of reserved stock
+    stock: int  # Add this field to keep track of reserved stock
     price: int
 
 
@@ -155,7 +154,7 @@ def handle_event(event):
 def create_item(price: int):
     key = str(uuid.uuid4())
     app.logger.debug(f"Item: {key} created")
-    value = msgpack.encode(StockValue(stock=0, reserved=0, price=int(price)))
+    value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
@@ -168,7 +167,7 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
     n = int(n)
     starting_stock = int(starting_stock)
     item_price = int(item_price)
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, reserved=0, price=item_price))
+    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, price=item_price))
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)
