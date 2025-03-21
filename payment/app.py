@@ -159,8 +159,7 @@ def find_user(user_id: str):
     return jsonify(
         {
             "user_id": user_id,
-            "credit": user_entry.credit,
-            "reserved": user_entry.reserved
+            "credit": user_entry.credit
         }
     )
 

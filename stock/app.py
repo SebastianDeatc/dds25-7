@@ -107,6 +107,7 @@ def handle_event(event):
                     break
 
         check_stock_ack = {
+            "event_type": "check_stock_ack",
             "order_id": order_id,
             "user_id": user_id,
             "success": success
