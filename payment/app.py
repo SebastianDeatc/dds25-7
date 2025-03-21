@@ -133,7 +133,7 @@ def handle_event(event):
 @app.post('/create_user')
 def create_user():
     key = str(uuid.uuid4())
-    value = msgpack.encode(UserValue(credit=0, reserved=0))
+    value = msgpack.encode(UserValue(credit=0))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
@@ -145,7 +145,7 @@ def create_user():
 def batch_init_users(n: int, starting_money: int):
     n = int(n)
     starting_money = int(starting_money)
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money, reserved=0))
+    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money))
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)
