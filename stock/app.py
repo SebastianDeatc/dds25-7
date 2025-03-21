@@ -101,13 +101,16 @@ def handle_event(event):
                 local items = cjson.decode(ARGV[1])
                 for item_id, amount in pairs(items) do
                     local encoded_stock = redis.call('GET', item_id)
-                    local stock = tonumber(cjson.decode(encoded_stock).stock)
+                    local stock = tonumber(cmsgpack.unpack(encoded_stock).stock)
                     if not stock or stock < amount then
                         return {false, "Not enough stock for item: " .. item_id}
                     end
                 end
                 for item_id, amount in pairs(items) do
-                    redis.call('DECRBY', item_id, amount)
+                    local encoded_stock = redis.call('GET', item_id)
+                    local stock_data = cmsgpack.unpack(encoded_stock)
+                    stock_data.stock = stock_data.stock - amount
+                    redis.call('SET', item_id, cmsgpack.pack(stock_data))
                 end
                 return {true, "Stock updated successfully"}
                 """
