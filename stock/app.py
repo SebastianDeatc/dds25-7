@@ -1,6 +1,7 @@
 import logging
 import os
 import atexit
+import time
 import uuid
 import threading
 import redis
@@ -89,30 +90,36 @@ def handle_event(event):
     event_type = event.get('event_type')
     order_id = event.get('order_id')
     user_id = event.get('user_id')
-    if event_type == "check_stock":
+    print('EVENT: ', event_type)
+    if event_type == "try_substract_stock":
         quantity = event.get('quantity')
         items = event.get('items')
         success = True
-        for item_id, quantity in items.items():
-            if success:
-                stock = get_item_from_db(item_id).stock
-                available = stock - quantity > 0
-                if available:
-                    logging.info(f"Locking item: {item_id}")
-                    #TODO: lock
-                else:
-                    logging.info(f"Item {item_id} not available")
-                    #TODO: release locks
-                    success = False
-                    break
 
-        check_stock_ack = {
-            "event_type": "check_stock_ack",
+        lua_script = """
+        local items = cjson.decode(ARGV[1])
+        for item_id, amount in pairs(items) do
+            local stock = tonumber(redis.call('GET', item_id))
+            if not stock or stock < amount then
+                return {false, "Not enough stock for item: " .. item_id}
+            end
+        end
+        for item_id, amount in pairs(items) do
+            redis.call('DECRBY', item_id, amount)
+        end
+        return {true, "Stock updated successfully"}
+        """
+        result = db.eval(lua_script, 0, json.dumps(items))
+        success = result[1]
+        message = result[2]
+        print(message)
+        substract_stock_ack = {
+            "event_type": "substract_stock_ack",
             "order_id": order_id,
             "user_id": user_id,
             "success": success
         }
-        producer.produce('stock-event', key= order_id, value=msgpack.encode(json.dumps(check_stock_ack)))
+        producer.produce('stock-event', key= order_id, value=msgpack.encode(json.dumps(substract_stock_ack)))
         producer.flush()
 
 
@@ -209,15 +216,20 @@ def add_stock(item_id: str, amount: int):
 def remove_stock(item_id: str, amount: int):
     item_entry: StockValue = get_item_from_db(item_id)
     # update stock, serialize and update database
-    item_entry.stock -= int(amount)
-    app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
-    if item_entry.stock < 0:
-        abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
-    try:
-        db.set(item_id, msgpack.encode(item_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
+    stock = get_item_from_db(item_id).stock
+    available = stock - amount > 0
+    if available:
+        item_entry.stock -= int(amount)
+        app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
+        if item_entry.stock < 0:
+            abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
+        try:
+            db.set(item_id, msgpack.encode(item_entry))
+        except redis.exceptions.RedisError:
+            return abort(400, DB_ERROR_STR)
+        return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
+    else: 
+        return Response(f"Item: {item_id} stock not enough.", status=500)
 
 
 if __name__ == '__main__':

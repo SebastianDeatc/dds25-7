@@ -97,7 +97,7 @@ def handle_event(event):
     event_type = event.get('event_type')
     order_id = event.get('order_id')
     user_id = event.get('user_id')
-    if event_type == 'check_stock_ack':
+    if event_type == 'substract_stock_ack':
         success = event.get('success')
         if success:
             logging.info(f"Items locked")
@@ -409,14 +409,14 @@ def checkout(order_id: str):
     items_quantities: dict[str, int] = defaultdict(int)
     for item_id, quantity in order_entry.items:
         items_quantities[item_id] += quantity
-
-    check_stock_event = {
-                "event_type": "check_stock",
+    logging.info('HERE')
+    try_substract_stock_event = {
+                "event_type": "try_substract_stock",
                 "order_id": order_id,
                 "user_id": order_entry.user_id,
                 "items": items_quantities
     }
-    producer.produce('order-stock-event', key=order_id, value=msgpack.encode(json.dumps(check_stock_event)))
+    producer.produce('order-stock-event', key=order_id, value=msgpack.encode(json.dumps(try_substract_stock_event)))
     producer.flush()
 
     return 'OK'
