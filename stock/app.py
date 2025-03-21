@@ -90,7 +90,6 @@ def handle_event(event):
     order_id = event.get('order_id')
     user_id = event.get('user_id')
     if event_type == "check_stock":
-        quantity = event.get('quantity')
         items = event.get('items')
         success = True
         for item_id, quantity in items.items():

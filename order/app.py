@@ -97,36 +97,41 @@ def handle_event(event):
     event_type = event.get('event_type')
     order_id = event.get('order_id')
     user_id = event.get('user_id')
-    if event_type == 'check_stock_ack':
+
+    if event_type == 'update_balance_success':
+        items_quantities: dict[str, int] = defaultdict(int)
+        order_entry = get_order_from_db(order_id)
+        for item_id, quantity in order_entry.items:
+            items_quantities[item_id] += quantity
+
+        check_stock_event = {
+            "event_type": "check_stock",
+            "order_id": order_id,
+            "user_id": order_entry.user_id,
+            "items": items_quantities
+        }
+        producer.produce('order-stock-event', key=order_id, value=msgpack.encode(json.dumps(check_stock_event)))
+        producer.flush()
+    elif event_type == 'update_balance_fail':
+        abort(400, f"Not enough balance! Order {order_id} did not go through")
+    elif event_type == 'refund_balance_success':
+        abort(400, f"Not enough balance! Refunded your order {order_id}.")
+    elif event_type == 'check_stock_ack':
         success = event.get('success')
         if success:
-            logging.info(f"Items locked")
+            logging.info(f"Checkout complete: {order_id}")
+            return Response(f"Checkout complete: {order_id}", status = 200)
+        else:
             order_entry = get_order_from_db(order_id)
-            payment_event = {
-                'event_type': "payment",
+            # Rollback the reserved stock / unlock
+            refund_event = {
+                'event_type': "refund_balance",
                 'order_id': order_id,
                 'user_id': user_id,
                 'amount': order_entry.total_cost
             }
-            producer.produce('order-payment-event', key = order_id, value = msgpack.encode(json.dumps(payment_event)))
-        else:
-            # Rollback the reserved stock / unlock
-            abort(400, f"Failed to reserve stock")
-    elif event_type == 'update_balance_success':
-        # Depending on the check stock approach we need to subtract stock here if we only lock
-        app.logger.debug("Checkout successful")
-        return Response("Checkout successful", status=200)
-    elif event_type == 'update_balance_fail':
-        order_entry = get_order_from_db(order_id)
-        refund_event = {
-            'event_type': "refund_balance",
-            'order_id': order_id,
-            'user_id': user_id,
-            'amount': order_entry.total_cost
-        }
-        producer.produce('order-payment-event', key = order_id, value = msgpack.encode(json.dumps(refund_event)))
-    elif event_type == 'refund_balance_success':
-        abort(400, f"Not enough balance! Refunded your order")
+            producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(refund_event)))
+            abort(400, f"Failed to reserve stock for order {order_id}.")
 
 
 def update_phase(item_id, user_id, amount_stock, amount_balance):
@@ -406,18 +411,15 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
 def checkout(order_id: str):
     app.logger.debug(f"Checking out {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
-    items_quantities: dict[str, int] = defaultdict(int)
-    for item_id, quantity in order_entry.items:
-        items_quantities[item_id] += quantity
 
-    check_stock_event = {
-                "event_type": "check_stock",
-                "order_id": order_id,
-                "user_id": order_entry.user_id,
-                "items": items_quantities
+    payment_event = {
+        'event_type': "payment",
+        'order_id': order_id,
+        'user_id': order_entry.user_id,
+        'amount': order_entry.total_cost
     }
-    producer.produce('order-stock-event', key=order_id, value=msgpack.encode(json.dumps(check_stock_event)))
-    producer.flush()
+    producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(payment_event)))
+
 
     return 'OK'
 

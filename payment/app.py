@@ -96,6 +96,7 @@ def handle_event(event):
         except HTTPException:
             update_balance_fail_event = {
                 "event_type": "update_balance_fail",
+                "order_id": order_id,
                 "user_id": user_id,
                 "amount": amount
             }
@@ -103,6 +104,7 @@ def handle_event(event):
         else:
             update_balance_success_event = {
                 "event_type": "update_balance_success",
+                "order_id": order_id,
                 "user_id": user_id,
                 "amount": amount
             }
@@ -115,6 +117,7 @@ def handle_event(event):
         except HTTPException:
             refund_balance_fail_event = {
                 "event_type": "refund_balance_fail",
+                "order_id": order_id,
                 "user_id": user_id,
                 "amount": amount
             }
@@ -122,6 +125,7 @@ def handle_event(event):
         else:
             refund_balance_success_event = {
                 "event_type": "refund_balance_success",
+                "order_id": order_id,
                 "user_id": user_id,
                 "amount": amount
             }
