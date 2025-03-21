@@ -109,7 +109,7 @@ def handle_event(event):
         producer.produce('payment-event', key = order_id, value=payment_ack_message)
         producer.flush()
     elif event_type == "refund_payment":
-        if not add_credit(user_id, amount):
+        if not add_credit(user_id, amount).status_code == 200:
             refund_payment_fail_event = {
                 "event_type": "refund_payment_fail",
                 "order_id": order_id,
@@ -179,7 +179,7 @@ def add_credit(user_id: str, amount: int):
             """
 
     result = db.eval(lua_script, 0, json.dumps(user_id), json.dumps(amount))
-    return result[0] == 1
+    return Response("Paymend added.", status=200) if result[0] == 1 else Response("Paymend failed to be added.", status=400)
 
 
 @app.post('/pay/<user_id>/<amount>')
