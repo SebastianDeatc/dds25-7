@@ -10,6 +10,7 @@ import json
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
+from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
@@ -48,6 +49,7 @@ atexit.register(close_db_connection)
 
 class UserValue(Struct):
     credit: int
+    reserved: int  # Add this field to keep track of reserved funds
 
 
 def get_user_from_db(user_id: str) -> UserValue | None:
@@ -65,30 +67,76 @@ def get_user_from_db(user_id: str) -> UserValue | None:
 
 def consume_kafka_events():
     logging.info("Kafka Consumer started...")
-    consumer.subscribe(['order-event'])
+    consumer.subscribe(['order-payment-event'])
 
     while True:
         msg = consumer.poll(1.0)
-
         if msg is None:
             continue
         if msg.error():
             logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
-        logging.info('Received message:{}'.format(msg.value().decode('utf-8')))
+        event = json.loads(msgpack.decode(msg.value()))
+        logging.info(f'Received message:{event}')
+        handle_event(event)
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
 thread.start()
 logging.info("Kafka Consumer started in a separate thread.")
 
 def handle_event(event):
-    print(f"Received event: {event}")
+    event_type = event.get('event_type')
+    order_id = event.get('order_id')
+    user_id = event.get('user_id')
+    amount = event.get('amount')
+    if event_type == "payment":
+        try:
+            remove_credit(user_id, amount)
+        except HTTPException:
+            payment_fail_event = {
+                "event_type": "payment_fail",
+                "order_id": order_id,
+                "user_id": user_id,
+                "amount": amount
+            }
+            payment_ack_message = msgpack.encode(json.dumps(payment_fail_event))
+        else:
+            payment_success_event = {
+                "event_type": "payment_success",
+                "order_id": order_id,
+                "user_id": user_id,
+                "amount": amount
+            }
+            payment_ack_message = msgpack.encode(json.dumps(payment_success_event))
+        producer.produce('payment-event', key = order_id, value=payment_ack_message)
+        producer.flush()
+    elif event_type == "refund_payment":
+        try:
+            add_credit(user_id, amount)
+        except HTTPException:
+            refund_payment_fail_event = {
+                "event_type": "refund_payment_fail",
+                "order_id": order_id,
+                "user_id": user_id,
+                "amount": amount
+            }
+            refund_payment_ack_message = msgpack.encode(json.dumps(refund_payment_fail_event))
+        else:
+            refund_payment_success_event = {
+                "event_type": "refund_payment_success",
+                "order_id": order_id,
+                "user_id": user_id,
+                "amount": amount
+            }
+            refund_payment_ack_message = msgpack.encode(json.dumps(refund_payment_success_event))
+        producer.produce('payment-event', key = order_id, value=refund_payment_ack_message)
+        producer.flush()
 
 @app.post('/create_user')
 def create_user():
     key = str(uuid.uuid4())
-    value = msgpack.encode(UserValue(credit=0))
+    value = msgpack.encode(UserValue(credit=0, reserved=0))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
@@ -100,7 +148,7 @@ def create_user():
 def batch_init_users(n: int, starting_money: int):
     n = int(n)
     starting_money = int(starting_money)
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money))
+    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money, reserved=0))
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)

@@ -4,8 +4,9 @@ import atexit
 import random
 import uuid
 import threading
+import json
 from collections import defaultdict
-
+import time
 import redis
 import requests
 
@@ -14,6 +15,7 @@ from flask import Flask, jsonify, abort, Response
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
+logging.basicConfig(level=logging.INFO)
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
@@ -24,8 +26,9 @@ producer = Producer({'bootstrap.servers': KAFKA_BROKER})
 logging.info("Kafka producer initialized successfully.")
 
 admin_client = AdminClient({'bootstrap.servers': KAFKA_BROKER})
-topic = NewTopic('order-event', num_partitions=3, replication_factor=1)
-fs = admin_client.create_topics([topic])
+os_topic = NewTopic('order-stock-event', num_partitions=3, replication_factor=1)
+op_topic = NewTopic('order-payment-event', num_partitions=3, replication_factor=1)
+fs = admin_client.create_topics([os_topic, op_topic])
 
 consumer = Consumer({
     "bootstrap.servers":KAFKA_BROKER,
@@ -76,18 +79,62 @@ def consume_kafka_events():
 
     while True:
         msg = consumer.poll(1.0)
-
         if msg is None:
             continue
         if msg.error():
             logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
-        logging.info('Received message:{}'.format(msg.value().decode('utf-8')))
+        event = json.loads(msgpack.decode(msg.value()))
+        logging.info(f'Received message:{event}')
+        handle_event(event)
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
 thread.start()
 logging.info("Kafka Consumer started in a separate thread.")
+
+def handle_event(event):
+    event_type = event.get('event_type')
+    order_id = event.get('order_id')
+    user_id = event.get('user_id')
+
+    if event_type == 'payment_success':
+        # payment was successfully completed so move on to checking stock
+        items_quantities: dict[str, int] = defaultdict(int)
+        order_entry = get_order_from_db(order_id)
+        for item_id, quantity in order_entry.items:
+            items_quantities[item_id] += quantity
+
+        check_stock_event = {
+            "event_type": "check_stock",
+            "order_id": order_id,
+            "user_id": order_entry.user_id,
+            "items": items_quantities
+        }
+        producer.produce('order-stock-event', key=order_id, value=msgpack.encode(json.dumps(check_stock_event)))
+        producer.flush()
+    elif event_type == 'payment_fail':
+        abort(400, f"Not enough balance! Order {order_id} did not go through")
+    elif event_type == 'refund_balance_success':
+        abort(400, f"Not enough balance! Refunded your order {order_id}.")
+    elif event_type == 'check_stock_ack':
+        success = event.get('success')
+        if success:
+            # if stock check suceeded checkout is successfully completed
+            logging.info(f"Checkout complete: {order_id}")
+            return Response(f"Checkout complete: {order_id}", status = 200)
+        else:
+            # if the stock check fails we should refund the order
+            order_entry = get_order_from_db(order_id)
+            refund_event = {
+                'event_type': "refund_payment",
+                'order_id': order_id,
+                'user_id': user_id,
+                'amount': order_entry.total_cost
+            }
+            producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(refund_event)))
+            abort(400, f"Failed to reserve stock for order {order_id}.")
+
 
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
@@ -136,7 +183,7 @@ def find_order(order_id: str):
             "paid": order_entry.paid,
             "items": order_entry.items,
             "user_id": order_entry.user_id,
-            "total_cost": order_entry.total_cost
+            "total_cost": order_entry.total_cost,
         }
     )
 
@@ -186,32 +233,17 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
 def checkout(order_id: str):
     app.logger.debug(f"Checking out {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
-    # get the quantity per item
-    items_quantities: dict[str, int] = defaultdict(int)
-    for item_id, quantity in order_entry.items:
-        items_quantities[item_id] += quantity
-    # The removed items will contain the items that we already have successfully subtracted stock from
-    # for rollback purposes.
-    removed_items: list[tuple[str, int]] = []
-    for item_id, quantity in items_quantities.items():
-        stock_reply = send_post_request(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
-        if stock_reply.status_code != 200:
-            # If one item does not have enough stock we need to rollback
-            rollback_stock(removed_items)
-            abort(400, f'Out of stock on item_id: {item_id}')
-        removed_items.append((item_id, quantity))
-    user_reply = send_post_request(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
-    if user_reply.status_code != 200:
-        # If the user does not have enough credit we need to rollback all the item stock subtractions
-        rollback_stock(removed_items)
-        abort(400, "User out of credit")
-    order_entry.paid = True
-    try:
-        db.set(order_id, msgpack.encode(order_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    app.logger.debug("Checkout successful")
-    return Response("Checkout successful", status=200)
+
+    # create and send the payment event message to payment microservice
+    payment_event = {
+        'event_type': "payment",
+        'order_id': order_id,
+        'user_id': order_entry.user_id,
+        'amount': order_entry.total_cost
+    }
+    producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(payment_event)))
+
+    return 'OK' # doesn't actually return an OK HTTP response, just placeholder
 
 
 if __name__ == '__main__':

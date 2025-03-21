@@ -4,9 +4,11 @@ import atexit
 import uuid
 import threading
 import redis
+import json
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
+from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
@@ -46,6 +48,7 @@ atexit.register(close_db_connection)
 
 class StockValue(Struct):
     stock: int
+    reserved: int  # Add this field to keep track of reserved stock
     price: int
 
 
@@ -64,36 +67,99 @@ def get_item_from_db(item_id: str) -> StockValue | None:
 
 def consume_kafka_events():
     logging.info("Kafka Consumer started...")
-    consumer.subscribe(['order-event'])
+    consumer.subscribe(['order-stock-event'])
 
     while True:
         msg = consumer.poll(1.0)
-
         if msg is None:
             continue
         if msg.error():
             logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
-        logging.info('Received message:{}'.format(msg.value().decode('utf-8')))
+        event = json.loads(msgpack.decode(msg.value()))
+        logging.info(f'Received message:{event}')
+        handle_event(event)
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
 thread.start()
 logging.info("Kafka Consumer started in a separate thread.")
 
+def handle_event(event):
+    event_type = event.get('event_type')
+    order_id = event.get('order_id')
+    user_id = event.get('user_id')
+    # if event_type == "check_stock":
+    #     items = event.get('items')
+    #     success = True
+    #     for item_id, quantity in items.items():
+    #         if success:
+    #             stock = get_item_from_db(item_id).stock
+    #             available = stock - quantity > 0
+    #             if available:
+    #                 logging.info(f"Locking item: {item_id}")
+    #                 #TODO: lock
+    #             else:
+    #                 logging.info(f"Item {item_id} not available")
+    #                 #TODO: release locks
+    #                 success = False
+    #                 break
+
+    #     check_stock_ack = {
+    #         "event_type": "check_stock_ack",
+    #         "order_id": order_id,
+    #         "user_id": user_id,
+    #         "success": success
+    #     }
+    #     producer.produce('stock-event', key= order_id, value=msgpack.encode(json.dumps(check_stock_ack)))
+    #     producer.flush()
+    if event_type == "check_stock":
+        items = event.get('items')
+        logging.info(f"items: {items}, type: {type(items)}")
+
+        lua_script = """
+                        local items = cjson.decode(ARGV[1])
+                        local items_new_amount = {}
+                        for item_id, amount in pairs(items) do
+                            local stock_obj = cmsgpack.unpack(redis.call('GET', item_id))
+                            if not stock_obj then
+                                return {false, "Item ID not found: " .. item_id}
+                            end
+                            local stock = tonumber(stock_obj.stock)
+                            if not stock or stock < amount then
+                                return {false, "Not enough stock for item: " .. item_id}
+                            end
+                            stock_obj.stock = stock - amount
+                            items_new_amount[item_id] = stock_obj
+                        end
+                        for item_id, stock_obj in pairs(items_new_amount) do
+                            redis.call('SET', item_id, cmsgpack.pack(stock_obj))
+                        end
+                        return {true, "Stock updated successfully"}
+                        """
+
+        result = db.eval(lua_script, 0, json.dumps(items))
+        success = result[0] == 1
+        logging.info(f"result: {result}")
+        check_stock_ack = {
+            "event_type": "check_stock_ack",
+            "order_id": order_id,
+            "user_id": user_id,
+            "success": success
+        }
+        producer.produce('stock-event', key= order_id, value=msgpack.encode(json.dumps(check_stock_ack)))
+        producer.flush()
+
+
 @app.post('/item/create/<price>')
 def create_item(price: int):
     key = str(uuid.uuid4())
     app.logger.debug(f"Item: {key} created")
-    value = msgpack.encode(StockValue(stock=0, price=int(price)))
+    value = msgpack.encode(StockValue(stock=0, reserved=0, price=int(price)))
     try:
         db.set(key, value)
-        producer.produce('stock-event', key=key, value=f"Item {key} created".encode('utf-8'))
-        producer.flush()
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    except KafkaException as e:
-        abort(500, f"Kafka Error: {str(e)}")
     return jsonify({'item_id': key})
 
 
@@ -102,7 +168,7 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
     n = int(n)
     starting_stock = int(starting_stock)
     item_price = int(item_price)
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, price=item_price))
+    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, reserved=0, price=item_price))
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)
