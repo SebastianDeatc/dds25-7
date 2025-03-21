@@ -99,6 +99,7 @@ def handle_event(event):
     user_id = event.get('user_id')
 
     if event_type == 'update_balance_success':
+        # payment was successfully completed so move on to checking stock
         items_quantities: dict[str, int] = defaultdict(int)
         order_entry = get_order_from_db(order_id)
         for item_id, quantity in order_entry.items:
@@ -119,11 +120,12 @@ def handle_event(event):
     elif event_type == 'check_stock_ack':
         success = event.get('success')
         if success:
+            # if stock check suceeded checkout is successfully completed
             logging.info(f"Checkout complete: {order_id}")
             return Response(f"Checkout complete: {order_id}", status = 200)
         else:
+            # if the stock check fails we should refund the order
             order_entry = get_order_from_db(order_id)
-            # Rollback the reserved stock / unlock
             refund_event = {
                 'event_type': "refund_balance",
                 'order_id': order_id,
@@ -133,49 +135,6 @@ def handle_event(event):
             producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(refund_event)))
             abort(400, f"Failed to reserve stock for order {order_id}.")
 
-
-def update_phase(item_id, user_id, amount_stock, amount_balance):
-    update_stock_event = {
-    "event_type": "update_stock",
-    "item_id": item_id,
-    "amount": amount_stock
-    }
-    update_stock_event_message = json.dumps(update_stock_event).encode('utf-8')
-
-    update_balance_event = {
-        "event_type": "update_balance",
-        "user_id": user_id,
-        "amount": amount_balance
-    }
-    update_balance_event_message = json.dumps(update_balance_event).encode('utf-8')
-
-    producer.produce('order-stock-event', value=update_stock_event_message)
-    producer.produce('order-payment-event', value=update_balance_event_message)
-    producer.flush()
-
-def update_stock(item_id, amount_stock):
-    update_stock_event = {
-    "event_type": "update_stock",
-    "item_id": item_id,
-    "amount": amount_stock
-    }
-    producer.produce('order-stock-event', value=json.dumps(update_stock_event))
-    producer.flush()
-
-def update_balance(user_id, amount_balance):
-    update_balance_event = {
-        "event_type": "update_balance",
-        "user_id": user_id,
-        "amount": amount_balance
-    }
-    producer.produce('order-payment-event', value=json.dumps(update_balance_event))
-    producer.flush()
-
-
-@app.post('/test/<item_id>/<user_id>/<amount_stock>/<amount_balance>')
-def test(item_id: str, user_id:str, amount_stock: str, amount_balance: str):
-    update_phase(item_id, user_id, amount_stock, amount_balance)
-    return jsonify({"message": "ok"}), 200
 
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
@@ -269,149 +228,13 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
     for item_id, quantity in removed_items:
         send_post_request(f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}")
 
-# @app.post('/checkout/<order_id>')
-# def checkout(order_id: str):
-#     app.logger.debug(f"Checking out {order_id}")
-#     order_entry: OrderValue = get_order_from_db(order_id)
-#     items_quantities: dict[str, int] = defaultdict(int)
-#     for item_id, quantity in order_entry.items:
-#         items_quantities[item_id] += quantity
-#
-#     # Publish stock reservation events
-#     for item_id, quantity in items_quantities.items():
-#         producer.produce('stock-event', key=item_id, value=f"reserve:{item_id}:{quantity}".encode('utf-8'))
-#     producer.flush()
-#
-#     # Publish funds reservation event
-#     producer.produce('payment-event', key=order_entry.user_id, value=f"reserve:{order_entry.user_id}:{order_entry.total_cost}".encode('utf-8'))
-#     producer.flush()
-#
-#     # Wait for responses from Stock and Payment Services
-#     reserved_items = []
-#     reserved_funds = False
-#     timeout = 30  # Timeout in seconds
-#     start_time = time.time()
-#
-#     consumer.subscribe(['order-event'])
-#
-#     while True:
-#         msg = consumer.poll(1.0)  # Use a shorter poll timeout
-#
-#         if msg is None:
-#             if time.time() - start_time > timeout:
-#                 logging.error("Timeout waiting for reservation events")
-#                 abort(400, "Timeout waiting for reservation events")
-#             continue
-#         if msg.error():
-#             logging.info(f"Kafka Consumer error: {msg.error()}")
-#             continue
-#
-#         event = msg.value().decode('utf-8')
-#         event_type, entity_id, status = event.split(':')
-#         logging.debug(f"Received event: {event}")
-#
-#         if event_type == 'stock' and status == 'reserved':
-#             reserved_items.append(entity_id)
-#             logging.debug(f"Stock reserved for item: {entity_id}")
-#         elif event_type == 'stock' and status == 'failed':
-#             logging.debug(f"Failed to reserve stock for item: {entity_id}, rolling back...")
-#             # Rollback previously reserved items
-#             for item_id in reserved_items:
-#                 producer.produce('stock-event', key=item_id, value=f"unreserve:{item_id}".encode('utf-8'))
-#             producer.flush()
-#             # Unreserve funds
-#             producer.produce('payment-event', key=order_entry.user_id, value=f"unreserve:{order_entry.user_id}:{order_entry.total_cost}".encode('utf-8'))
-#             producer.flush()
-#             abort(400, f"Failed to reserve stock for item: {entity_id}")
-#
-#         if event_type == 'payment' and status == 'reserved':
-#             reserved_funds = True
-#             logging.debug(f"Funds reserved for user: {entity_id}")
-#         elif event_type == 'payment' and status == 'failed':
-#             logging.debug(f"Failed to reserve funds for user: {entity_id}, rolling back...")
-#             # Rollback previously reserved items
-#             for item_id in reserved_items:
-#                 producer.produce('stock-event', key=item_id, value=f"unreserve:{item_id}".encode('utf-8'))
-#             producer.flush()
-#             abort(400, f"Failed to reserve funds for user: {entity_id}")
-#
-#         if len(reserved_items) == len(items_quantities) and reserved_funds:
-#             logging.debug("All items reserved and funds reserved.")
-#             break
-#
-#     # Publish stock subtraction events
-#     for item_id, quantity in items_quantities.items():
-#         producer.produce('stock-event', key=item_id, value=f"subtract:{item_id}:{quantity}".encode('utf-8'))
-#     producer.flush()
-#
-#     # Publish payment deduction event
-#     producer.produce('payment-event', key=order_entry.user_id, value=f"pay:{order_entry.user_id}:{order_entry.total_cost}".encode('utf-8'))
-#     producer.flush()
-#
-#     # Wait for subtraction and payment confirmations
-#     subtracted_items = []
-#     payment_confirmed = False
-#     start_time = time.time()
-#
-#     while True:
-#         msg = consumer.poll(1.0)  # Use a shorter poll timeout
-#
-#         if msg is None:
-#             if time.time() - start_time > timeout:
-#                 logging.error("Timeout waiting for subtraction and payment events")
-#                 abort(400, "Timeout waiting for subtraction and payment events")
-#             continue
-#         if msg.error():
-#             logging.info(f"Kafka Consumer error: {msg.error()}")
-#             continue
-#
-#         event = msg.value().decode('utf-8')
-#         event_type, entity_id, status = event.split(':')
-#         logging.debug(f"Received event: {event}")
-#
-#         if event_type == 'stock' and status == 'subtracted':
-#             subtracted_items.append(entity_id)
-#             logging.debug(f"Stock subtracted for item: {entity_id}")
-#         elif event_type == 'stock' and status == 'failed':
-#             logging.debug(f"Failed to subtract stock for item: {entity_id}, rolling back...")
-#             # Rollback previously subtracted items
-#             for item_id in subtracted_items:
-#                 producer.produce('stock-event', key=item_id, value=f"add:{item_id}:{items_quantities[item_id]}".encode('utf-8'))
-#             producer.flush()
-#             # Refund payment
-#             producer.produce('payment-event', key=order_entry.user_id, value=f"refund:{order_entry.user_id}:{order_entry.total_cost}".encode('utf-8'))
-#             producer.flush()
-#             abort(400, f"Failed to subtract stock for item: {entity_id}")
-#
-#         if event_type == 'payment' and status == 'paid':
-#             payment_confirmed = True
-#             logging.debug(f"Payment confirmed for user: {entity_id}")
-#         elif event_type == 'payment' and status == 'failed':
-#             logging.debug(f"Failed to deduct payment for user: {entity_id}, rolling back...")
-#             # Rollback previously subtracted items
-#             for item_id in subtracted_items:
-#                 producer.produce('stock-event', key=item_id, value=f"add:{item_id}:{items_quantities[item_id]}".encode('utf-8'))
-#             producer.flush()
-#             abort(400, f"Failed to deduct payment for user: {entity_id}")
-#
-#         if len(subtracted_items) == len(items_quantities) and payment_confirmed:
-#             logging.debug("All items subtracted and payment confirmed.")
-#             break
-#
-#     order_entry.paid = True
-#     try:
-#         db.set(order_id, msgpack.encode(order_entry))
-#     except redis.exceptions.RedisError:
-#         return abort(400, DB_ERROR_STR)
-#     app.logger.debug("Checkout successful")
-#     return Response("Checkout successful", status=200)
-
 
 @app.post('/checkout/<order_id>')
 def checkout(order_id: str):
     app.logger.debug(f"Checking out {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
 
+    # create and send the payment event message to payment microservice
     payment_event = {
         'event_type': "payment",
         'order_id': order_id,
@@ -420,8 +243,7 @@ def checkout(order_id: str):
     }
     producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(payment_event)))
 
-
-    return 'OK'
+    return 'OK' # doesn't actually return an OK HTTP response, just placeholder
 
 
 if __name__ == '__main__':

@@ -115,46 +115,6 @@ def handle_event(event):
         producer.flush()
 
 
-    # if event_type == "update_stock":
-    #     try:
-    #         remove_stock(item_id, amount)
-    #     except HTTPException:
-    #         update_stock_fail_event = {
-    #             "event_type": "update_stock_fail",
-    #             "item_id": item_id,
-    #             "amount": amount
-    #         }
-    #         update_stock_ack_message = json.dumps(update_stock_fail_event).encode('utf-8')
-    #     else:
-    #         update_stock_ack_event = {
-    #             "event_type": "update_stock_ack",
-    #             "item_id": item_id,
-    #             "amount": amount
-    #         }
-    #         update_stock_ack_message = json.dumps(update_stock_ack_event).encode('utf-8')
-    #     producer.produce('order-payment-event', value=update_stock_ack_message)
-    #     producer.flush()
-    # elif event_type == "rollback_stock":
-    #     try:
-    #         add_stock(item_id, amount)
-    #     except HTTPException:
-    #         rollback_stock_fail_event = {
-    #             "event_type": "rollback_stock_fail",
-    #             "item_id": item_id,
-    #             "amount": amount
-    #         }
-    #         rollback_stock_ack_message = json.dumps(rollback_stock_fail_event).encode('utf-8')
-    #     else:
-    #         rollback_stock_ack_event = {
-    #             "event_type": "rollback_stock_ack",
-    #             "item_id": item_id,
-    #             "amount": amount
-    #         }
-    #         rollback_stock_ack_message = json.dumps(rollback_stock_ack_event).encode('utf-8')
-    #     producer.produce('order-payment-event', value=rollback_stock_ack_message)
-    #     producer.flush()
-
-
 @app.post('/item/create/<price>')
 def create_item(price: int):
     key = str(uuid.uuid4())
