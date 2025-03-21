@@ -94,25 +94,26 @@ def handle_event(event):
     if event_type == "try_substract_stock":
         quantity = event.get('quantity')
         items = event.get('items')
+        logging.info(f"items: {items}, type: {type(items)}")
         success = True
 
         lua_script = """
-        local items = cjson.decode(ARGV[1])
-        for item_id, amount in pairs(items) do
-            local stock = tonumber(redis.call('GET', item_id))
-            if not stock or stock < amount then
-                return {false, "Not enough stock for item: " .. item_id}
-            end
-        end
-        for item_id, amount in pairs(items) do
-            redis.call('DECRBY', item_id, amount)
-        end
-        return {true, "Stock updated successfully"}
-        """
+                local items = cjson.decode(ARGV[1])
+                for item_id, amount in pairs(items) do
+                    local encoded_stock = redis.call('GET', item_id)
+                    local stock = tonumber(cjson.decode(encoded_stock).stock)
+                    if not stock or stock < amount then
+                        return {false, "Not enough stock for item: " .. item_id}
+                    end
+                end
+                for item_id, amount in pairs(items) do
+                    redis.call('DECRBY', item_id, amount)
+                end
+                return {true, "Stock updated successfully"}
+                """
         result = db.eval(lua_script, 0, json.dumps(items))
-        success = result[1]
-        message = result[2]
-        print(message)
+        success = result[0] == 1
+        logging.info(f"result: {result}")
         substract_stock_ack = {
             "event_type": "substract_stock_ack",
             "order_id": order_id,
