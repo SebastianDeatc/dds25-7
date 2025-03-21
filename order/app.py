@@ -98,7 +98,7 @@ def handle_event(event):
     order_id = event.get('order_id')
     user_id = event.get('user_id')
 
-    if event_type == 'update_balance_success':
+    if event_type == 'payment_success':
         # payment was successfully completed so move on to checking stock
         items_quantities: dict[str, int] = defaultdict(int)
         order_entry = get_order_from_db(order_id)
@@ -113,7 +113,7 @@ def handle_event(event):
         }
         producer.produce('order-stock-event', key=order_id, value=msgpack.encode(json.dumps(check_stock_event)))
         producer.flush()
-    elif event_type == 'update_balance_fail':
+    elif event_type == 'payment_fail':
         abort(400, f"Not enough balance! Order {order_id} did not go through")
     elif event_type == 'refund_balance_success':
         abort(400, f"Not enough balance! Refunded your order {order_id}.")
@@ -127,7 +127,7 @@ def handle_event(event):
             # if the stock check fails we should refund the order
             order_entry = get_order_from_db(order_id)
             refund_event = {
-                'event_type': "refund_balance",
+                'event_type': "refund_payment",
                 'order_id': order_id,
                 'user_id': user_id,
                 'amount': order_entry.total_cost

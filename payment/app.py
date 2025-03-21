@@ -94,43 +94,43 @@ def handle_event(event):
         try:
             remove_credit(user_id, amount)
         except HTTPException:
-            update_balance_fail_event = {
-                "event_type": "update_balance_fail",
+            payment_fail_event = {
+                "event_type": "payment_fail",
                 "order_id": order_id,
                 "user_id": user_id,
                 "amount": amount
             }
-            update_balance_ack_message = msgpack.encode(json.dumps(update_balance_fail_event))
+            payment_ack_message = msgpack.encode(json.dumps(payment_fail_event))
         else:
-            update_balance_success_event = {
-                "event_type": "update_balance_success",
+            payment_success_event = {
+                "event_type": "payment_success",
                 "order_id": order_id,
                 "user_id": user_id,
                 "amount": amount
             }
-            update_balance_ack_message = msgpack.encode(json.dumps(update_balance_success_event))
-        producer.produce('payment-event', key = order_id, value=update_balance_ack_message)
+            payment_ack_message = msgpack.encode(json.dumps(payment_success_event))
+        producer.produce('payment-event', key = order_id, value=payment_ack_message)
         producer.flush()
-    elif event_type == "refund_balance":
+    elif event_type == "refund_payment":
         try:
             add_credit(user_id, amount)
         except HTTPException:
-            refund_balance_fail_event = {
-                "event_type": "refund_balance_fail",
+            refund_payment_fail_event = {
+                "event_type": "refund_payment_fail",
                 "order_id": order_id,
                 "user_id": user_id,
                 "amount": amount
             }
-            refund_balance_ack_message = msgpack.encode(json.dumps(refund_balance_fail_event))
+            refund_payment_ack_message = msgpack.encode(json.dumps(refund_payment_fail_event))
         else:
-            refund_balance_success_event = {
-                "event_type": "refund_balance_success",
+            refund_payment_success_event = {
+                "event_type": "refund_payment_success",
                 "order_id": order_id,
                 "user_id": user_id,
                 "amount": amount
             }
-            refund_balance_ack_message = msgpack.encode(json.dumps(refund_balance_success_event))
-        producer.produce('payment-event', key = order_id, value=refund_balance_ack_message)
+            refund_payment_ack_message = msgpack.encode(json.dumps(refund_payment_success_event))
+        producer.produce('payment-event', key = order_id, value=refund_payment_ack_message)
         producer.flush()
 
 @app.post('/create_user')
