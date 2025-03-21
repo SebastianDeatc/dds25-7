@@ -49,7 +49,6 @@ atexit.register(close_db_connection)
 
 class StockValue(Struct):
     stock: int
-    reserved: int  # Add this field to keep track of reserved stock
     price: int
 
 
@@ -98,22 +97,26 @@ def handle_event(event):
         success = True
 
         lua_script = """
-                local items = cjson.decode(ARGV[1])
-                for item_id, amount in pairs(items) do
-                    local encoded_stock = redis.call('GET', item_id)
-                    local stock = tonumber(cmsgpack.unpack(encoded_stock).stock)
-                    if not stock or stock < amount then
-                        return {false, "Not enough stock for item: " .. item_id}
-                    end
-                end
-                for item_id, amount in pairs(items) do
-                    local encoded_stock = redis.call('GET', item_id)
-                    local stock_data = cmsgpack.unpack(encoded_stock)
-                    stock_data.stock = stock_data.stock - amount
-                    redis.call('SET', item_id, cmsgpack.pack(stock_data))
-                end
-                return {true, "Stock updated successfully"}
-                """
+                        local items = cjson.decode(ARGV[1])
+                        local items_new_amount = {}
+                        for item_id, amount in pairs(items) do
+                            local stock_obj = cmsgpack.unpack(redis.call('GET', item_id))
+                            if not stock_obj then
+                                return {false, "Item ID not found: " .. item_id}
+                            end
+                            local stock = tonumber(stock_obj.stock)
+                            if not stock or stock < amount then
+                                return {false, "Not enough stock for item: " .. item_id}
+                            end
+                            stock_obj.stock = stock - amount
+                            items_new_amount[item_id] = stock_obj
+                        end
+                        for item_id, stock_obj in pairs(items_new_amount) do
+                            redis.call('SET', item_id, cmsgpack.pack(stock_obj))
+                        end
+                        return {true, "Stock updated successfully"}
+                        """
+
         result = db.eval(lua_script, 0, json.dumps(items))
         success = result[0] == 1
         logging.info(f"result: {result}")
@@ -171,7 +174,7 @@ def handle_event(event):
 def create_item(price: int):
     key = str(uuid.uuid4())
     app.logger.debug(f"Item: {key} created")
-    value = msgpack.encode(StockValue(stock=0, reserved=0, price=int(price)))
+    value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
@@ -184,7 +187,7 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
     n = int(n)
     starting_stock = int(starting_stock)
     item_price = int(item_price)
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, reserved=0, price=item_price))
+    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, price=item_price))
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)
