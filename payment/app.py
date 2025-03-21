@@ -49,7 +49,6 @@ atexit.register(close_db_connection)
 
 class UserValue(Struct):
     credit: int
-    reserved: int  # Add this field to keep track of reserved funds
 
 
 def get_user_from_db(user_id: str) -> UserValue | None:
@@ -91,9 +90,7 @@ def handle_event(event):
     user_id = event.get('user_id')
     amount = event.get('amount')
     if event_type == "payment":
-        try:
-            remove_credit(user_id, amount)
-        except HTTPException:
+        if not remove_credit(user_id, amount):
             payment_fail_event = {
                 "event_type": "payment_fail",
                 "order_id": order_id,
@@ -182,19 +179,25 @@ def add_credit(user_id: str, amount: int):
 
 @app.post('/pay/<user_id>/<amount>')
 def remove_credit(user_id: str, amount: int):
-    app.logger.debug(f"Removing {amount} credit from user: {user_id}")
-    user_entry: UserValue = get_user_from_db(user_id)
-    # update credit, serialize and update database
-    user_entry.credit -= int(amount)
-    if user_entry.credit < 0:
-        abort(400, f"User: {user_id} credit cannot get reduced below zero!")
-    try:
-        db.set(user_id, msgpack.encode(user_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
+    lua_script = """
+                    local user_id = cjson.decode(ARGV[1])
+                    local amount = cjson.decode(ARGV[2])
+                    local user_obj = cmsgpack.unpack(redis.call('GET', user_id))
+                    if not user_obj then
+                        return {false, "User ID not found: " .. user_id}
+                    end
+                    local user_credit = tonumber(user_obj.credit)
+                    if not user_credit or user_credit < amount then
+                        return {false, "Not enough credit for user: " .. user_id}
+                    end
+                    user_obj.credit = user_credit - amount
+                    redis.call('SET', user_id, cmsgpack.pack(user_obj))
+                    return {true, "User credit updated successfully"}
+                """
 
-
+    result = db.eval(lua_script, 0, json.dumps(user_id), json.dumps(amount))
+    return result[0] == 1
+    
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
