@@ -1,10 +1,10 @@
 import requests
 import json
 
+#Stock is 5 we try to buy 6!
+
 # Base URLs
 base_url = "http://localhost:8000"
-
-# 1st order - all good
 
 # Create stock item
 response = requests.post(f"{base_url}/stock/item/create/5")
@@ -30,7 +30,7 @@ order_id = response.json()["order_id"]
 print(f"Created order with ID: {order_id}")
 
 # Add item to order
-response = requests.post(f"{base_url}/orders/addItem/{order_id}/{item_id}/1")
+response = requests.post(f"{base_url}/orders/addItem/{order_id}/{item_id}/6")
 print(f"Added item to order {order_id}: {response.status_code}")
 
 # Find order
