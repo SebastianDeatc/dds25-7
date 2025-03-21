@@ -7,7 +7,7 @@ base_url = "http://localhost:8000"
 # Item costs 101 we have 100!
 
 # Create stock item
-response = requests.post(f"{base_url}/stock/item/create/5")
+response = requests.post(f"{base_url}/stock/item/create/101")
 item_id = response.json()["item_id"]
 print(f"Created item with ID: {item_id}")
 

@@ -17,7 +17,7 @@ user_id = response.json()["user_id"]
 print(f"Created user with ID: {user_id}")
 
 # Add stock to item
-response = requests.post(f"{base_url}/stock/add/{item_id}/10")
+response = requests.post(f"{base_url}/stock/add/{item_id}/1")
 print(f"Added stock to item {item_id}: {response.status_code}")
 
 # Add funds to user
