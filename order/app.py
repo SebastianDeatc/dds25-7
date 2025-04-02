@@ -58,7 +58,7 @@ class OrderValue(Struct):
     items: list[tuple[str, int]]
     user_id: str
     total_cost: int
-    completed: bool
+    completed: bool = False
 
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
@@ -122,6 +122,7 @@ def handle_event(event):
         success = event.get('success')
         if success:
             # if stock check suceeded checkout is successfully completed
+            order_entry = get_order_from_db(order_id)
             logging.info(f"Checkout complete: {order_id}")
             order_entry.completed = True
             checkout(order_id)
