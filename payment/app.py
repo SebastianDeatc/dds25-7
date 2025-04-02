@@ -77,7 +77,7 @@ def consume_kafka_events():
             continue
 
         event = json.loads(msgpack.decode(msg.value()))
-        logging.info(f'Received message:{event}')
+        #logging.info(f'Received message:{event}')
         handle_event(event)
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)

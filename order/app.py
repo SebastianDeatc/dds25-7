@@ -59,6 +59,7 @@ class OrderValue(Struct):
     user_id: str
     total_cost: int
     completed: bool = False
+    failed: bool = False
 
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
@@ -74,6 +75,18 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
         abort(400, f"Order: {order_id} not found!")
     return entry
 
+
+def update_order_status(order_id: str, completed, failed):
+    order_entry = get_order_from_db(order_id)
+
+    order_entry.completed = completed
+    order_entry.failed = failed
+
+    try:
+        db.set(order_id, msgpack.encode(order_entry))
+    except redis.exceptions.RedisError:
+        abort(400, DB_ERROR_STR)
+
 def consume_kafka_events():
     logging.info("Kafka Consumer started...")
     consumer.subscribe(['stock-event', 'payment-event'])
@@ -87,7 +100,7 @@ def consume_kafka_events():
             continue
 
         event = json.loads(msgpack.decode(msg.value()))
-        logging.info(f'Received message:{event}')
+        #logging.info(f'Received message:{event}')
         handle_event(event)
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
@@ -115,16 +128,22 @@ def handle_event(event):
         producer.produce('order-stock-event', key=order_id, value=msgpack.encode(json.dumps(check_stock_event)))
         producer.flush()
     elif event_type == 'payment_fail':
-        abort(400, f"Not enough balance! Order {order_id} did not go through")
+        #abort(400, f"Not enough balance! Order {order_id} did not go through")
+        #logging.info(f"Not enough balance! Order {order_id} did not go through")
+        update_order_status(order_id, completed=False, failed=True)
+        checkout(order_id)
     elif event_type == 'refund_balance_success':
-        abort(400, f"Not enough balance! Refunded your order {order_id}.")
+        #logging.info(f"Balance refunded, order: {order_id}")
+        update_order_status(order_id, completed=False, failed=True)
+        checkout
     elif event_type == 'check_stock_ack':
         success = event.get('success')
         if success:
             # if stock check suceeded checkout is successfully completed
             order_entry = get_order_from_db(order_id)
-            logging.info(f"Checkout complete: {order_id}")
+            #logging.info(f"Checkout complete: {order_id}")
             order_entry.completed = True
+            update_order_status(order_id, completed=True, failed=False)
             checkout(order_id)
         else:
             # if the stock check fails we should refund the order
@@ -136,7 +155,10 @@ def handle_event(event):
                 'amount': order_entry.total_cost
             }
             producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(refund_event)))
-            abort(400, f"Failed to reserve stock for order {order_id}.")
+            #abort(400, f"Failed to reserve stock for order {order_id}.")
+            #logging.info(f"Failed to reserve stock for order {order_id}.")
+            update_order_status(order_id, completed=False, failed=True)
+            checkout(order_id)
 
 
 @app.post('/create/<user_id>')
@@ -248,6 +270,16 @@ def checkout(order_id: str):
     }
     producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(payment_event)))
 
+    start_time = time.time()
+    while time.time() - start_time < 30:
+        time.sleep(2)  # Check every second
+        order_entry = get_order_from_db(order_id)
+        if order_entry.completed:
+            return Response(f"Checkout complete: {order_id}", status=200)
+        if order_entry.failed:
+            return Response(f"Checkout failed: {order_id}", status=400)
+
+    return Response(f"Checkout still in progress: {order_id}", status=202)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)

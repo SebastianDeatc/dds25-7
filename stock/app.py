@@ -77,7 +77,7 @@ def consume_kafka_events():
             continue
 
         event = json.loads(msgpack.decode(msg.value()))
-        logging.info(f'Received message:{event}')
+        #logging.info(f'Received message:{event}')
         handle_event(event)
 
 thread = threading.Thread(target=consume_kafka_events, daemon=True)
@@ -114,7 +114,7 @@ def handle_event(event):
     #     producer.flush()
     if event_type == "check_stock":
         items = event.get('items')
-        logging.info(f"items: {items}, type: {type(items)}")
+        #logging.info(f"items: {items}, type: {type(items)}")
 
         lua_script = """
                         local items = cjson.decode(ARGV[1])
@@ -139,7 +139,7 @@ def handle_event(event):
 
         result = db.eval(lua_script, 0, json.dumps(items))
         success = result[0] == 1
-        logging.info(f"result: {result}")
+        #logging.info(f"result: {result}")
         check_stock_ack = {
             "event_type": "check_stock_ack",
             "order_id": order_id,
