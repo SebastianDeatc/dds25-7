@@ -141,7 +141,7 @@ def handle_event(event):
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
     key = str(uuid.uuid4())
-    value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
+    value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0, completed=False))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
@@ -164,7 +164,8 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
         value = OrderValue(paid=False,
                            items=[(f"{item1_id}", 1), (f"{item2_id}", 1)],
                            user_id=f"{user_id}",
-                           total_cost=2*item_price)
+                           total_cost=2*item_price,
+                           completed=False)
         return value
 
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
@@ -186,6 +187,7 @@ def find_order(order_id: str):
             "items": order_entry.items,
             "user_id": order_entry.user_id,
             "total_cost": order_entry.total_cost,
+            "completed": order_entry.completed
         }
     )
 
