@@ -58,6 +58,7 @@ class OrderValue(Struct):
     items: list[tuple[str, int]]
     user_id: str
     total_cost: int
+    completed: bool
 
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
@@ -122,7 +123,8 @@ def handle_event(event):
         if success:
             # if stock check suceeded checkout is successfully completed
             logging.info(f"Checkout complete: {order_id}")
-            return Response(f"Checkout complete: {order_id}", status = 200)
+            order_entry.completed = True
+            checkout(order_id)
         else:
             # if the stock check fails we should refund the order
             order_entry = get_order_from_db(order_id)
@@ -233,6 +235,8 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
 def checkout(order_id: str):
     app.logger.debug(f"Checking out {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
+    if order_entry.completed:
+        return Response(f"Checkout complete: {order_id}", status = 200)
 
     # create and send the payment event message to payment microservice
     payment_event = {
@@ -242,8 +246,6 @@ def checkout(order_id: str):
         'amount': order_entry.total_cost
     }
     producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(payment_event)))
-
-    return 'OK' # doesn't actually return an OK HTTP response, just placeholder
 
 
 if __name__ == '__main__':
