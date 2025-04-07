@@ -132,7 +132,7 @@ async def handle_event(event):
     elif event_type == 'payment_fail':
         await update_order_result(400, f"Not enough balance! Order {order_id} did not go through")
         # logging.error(f"Payment failed for order {order_id}")
-    elif event_type == 'refund_balance_success':
+    elif event_type == 'refund_payment_success':
         await update_order_result(400, f"Not enough balance! Refunded your order {order_id}.")
         # logging.error(f"Refund processed for order {order_id} indicates a failure")
     elif event_type == 'check_stock_ack':
