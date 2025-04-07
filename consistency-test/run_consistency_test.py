@@ -8,6 +8,8 @@ from verify import verify_systems_consistency
 from populate import populate_databases
 from stress import stress
 
+import time
+
 logging.basicConfig(level=logging.INFO,
                     format='%(levelname)s - %(asctime)s - %(name)s - %(message)s',
                     datefmt='%I:%M:%S')
@@ -36,6 +38,7 @@ logger.info("Load test completed")
 
 # Verify the systems' consistency
 logger.info("Starting the consistency evaluation...")
+time.sleep(10)
 asyncio.run(verify_systems_consistency(tmp_folder_path, item_ids, user_ids))
 logger.info("Consistency evaluation completed")
 

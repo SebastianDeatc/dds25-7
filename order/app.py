@@ -26,8 +26,8 @@ producer = Producer({'bootstrap.servers': KAFKA_BROKER})
 logging.info("Kafka producer initialized successfully.")
 
 admin_client = AdminClient({'bootstrap.servers': KAFKA_BROKER})
-os_topic = NewTopic('order-stock-event', num_partitions=3, replication_factor=1)
-op_topic = NewTopic('order-payment-event', num_partitions=3, replication_factor=1)
+os_topic = NewTopic('order-stock-event', num_partitions=10, replication_factor=1)
+op_topic = NewTopic('order-payment-event', num_partitions=10, replication_factor=1)
 fs = admin_client.create_topics([os_topic, op_topic])
 
 consumer = Consumer({
@@ -131,11 +131,15 @@ def handle_event(event):
         #abort(400, f"Not enough balance! Order {order_id} did not go through")
         #logging.info(f"Not enough balance! Order {order_id} did not go through")
         update_order_status(order_id, completed=False, failed=True)
-        checkout(order_id)
+        # if order_id in order_conditions:
+        #     with order_conditions[order_id]:
+        #         order_conditions[order_id].notify()
     elif event_type == 'refund_balance_success':
         #logging.info(f"Balance refunded, order: {order_id}")
         update_order_status(order_id, completed=False, failed=True)
-        checkout
+        # if order_id in order_conditions:
+        #     with order_conditions[order_id]:
+        #         order_conditions[order_id].notify()
     elif event_type == 'check_stock_ack':
         success = event.get('success')
         if success:
@@ -144,7 +148,9 @@ def handle_event(event):
             #logging.info(f"Checkout complete: {order_id}")
             order_entry.completed = True
             update_order_status(order_id, completed=True, failed=False)
-            checkout(order_id)
+            # if order_id in order_conditions:
+            #     with order_conditions[order_id]:
+            #         order_conditions[order_id].notify()
         else:
             # if the stock check fails we should refund the order
             order_entry = get_order_from_db(order_id)
@@ -158,7 +164,9 @@ def handle_event(event):
             #abort(400, f"Failed to reserve stock for order {order_id}.")
             #logging.info(f"Failed to reserve stock for order {order_id}.")
             update_order_status(order_id, completed=False, failed=True)
-            checkout(order_id)
+            # if order_id in order_conditions:
+            #     with order_conditions[order_id]:
+            #         order_conditions[order_id].notify()
 
 
 @app.post('/create/<user_id>')
@@ -258,8 +266,6 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
 def checkout(order_id: str):
     app.logger.debug(f"Checking out {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
-    if order_entry.completed:
-        return Response(f"Checkout complete: {order_id}", status = 200)
 
     # create and send the payment event message to payment microservice
     payment_event = {
@@ -270,16 +276,29 @@ def checkout(order_id: str):
     }
     producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(payment_event)))
 
-    start_time = time.time()
-    while time.time() - start_time < 30:
-        time.sleep(2)  # Check every second
-        order_entry = get_order_from_db(order_id)
-        if order_entry.completed:
-            return Response(f"Checkout complete: {order_id}", status=200)
-        if order_entry.failed:
-            return Response(f"Checkout failed: {order_id}", status=400)
+    # start_time = time.time()
+    # while time.time() - start_time < 30:
+    #     time.sleep(1)  # Check every second
+    #     order_entry = get_order_from_db(order_id)
+    #     if order_entry.completed:
+    #         return Response(f"Checkout complete: {order_id}", status=200)
+    #     if order_entry.failed:
+    #         return Response(f"Checkout failed: {order_id}", status=400)
 
-    return Response(f"Checkout still in progress: {order_id}", status=202)
+    # condition = threading.Condition()
+    # order_conditions[order_id] = condition
+    #
+    # # Wait for order completion
+    # with condition:
+    #     order_conditions[order_id].wait(timeout=30)  # Wait for up to 30 seconds
+    #
+    # order_entry = get_order_from_db(order_id)
+    # if order_entry.completed:
+    #     return Response(f"Checkout complete: {order_id}", status=200)
+    # else:
+    #     return Response(f"Checkout failed: {order_id}", status=400)
+
+    return Response(f"Checkout received and created: {order_id}", status=201)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
