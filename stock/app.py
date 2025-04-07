@@ -1,3 +1,5 @@
+import asyncio
+import functools
 import logging
 import os
 import atexit
@@ -7,7 +9,8 @@ import redis
 import json
 
 from msgspec import msgpack, Struct
-from flask import Flask, jsonify, abort, Response
+from quart import Quart, jsonify, abort, Response
+
 from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
@@ -32,7 +35,7 @@ consumer = Consumer({
 })
 
 
-app = Flask("stock-service")
+app = Quart("stock-service")
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
@@ -64,27 +67,34 @@ def get_item_from_db(item_id: str) -> StockValue | None:
         abort(400, f"Item: {item_id} not found!")
     return entry
 
-def consume_kafka_events():
-    logging.info("Kafka Consumer started...")
+async def async_consumer_poll(loop, timeout):
+    return await loop.run_in_executor(None, functools.partial(consumer.poll, timeout))
+
+async def consume_kafka_events():
+    # logging.info("Kafka Consumer started...")
     consumer.subscribe(['order-stock-event'])
 
     while True:
-        msg = consumer.poll(1.0)
+        msg = await async_consumer_poll(asyncio.get_event_loop(), 1.0)
         if msg is None:
             continue
         if msg.error():
-            logging.info(f"Kafka Consumer error: {msg.error()}")
+            # logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
         event = json.loads(msgpack.decode(msg.value()))
-        logging.info(f'Received message:{event}')
-        handle_event(event)
+        # logging.info(f'Received message:{event}')
+        # handle_event(event)
+        asyncio.get_running_loop().create_task(handle_event(event))
 
-thread = threading.Thread(target=consume_kafka_events, daemon=True)
-thread.start()
-logging.info("Kafka Consumer started in a separate thread.")
+def start_consumer_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(consume_kafka_events())
 
-def handle_event(event):
+threading.Thread(target=start_consumer_thread, daemon=True).start()
+
+async def handle_event(event):
     event_type = event.get('event_type')
     order_id = event.get('order_id')
     user_id = event.get('user_id')
@@ -114,7 +124,7 @@ def handle_event(event):
     #     producer.flush()
     if event_type == "check_stock":
         items = event.get('items')
-        logging.info(f"items: {items}, type: {type(items)}")
+        # logging.info(f"items: {items}, type: {type(items)}")
 
         lua_script = """
                         local items = cjson.decode(ARGV[1])
@@ -139,7 +149,7 @@ def handle_event(event):
 
         result = db.eval(lua_script, 0, json.dumps(items))
         success = result[0] == 1
-        logging.info(f"result: {result}")
+        # logging.info(f"result: {result}")
         check_stock_ack = {
             "event_type": "check_stock_ack",
             "order_id": order_id,
@@ -151,7 +161,7 @@ def handle_event(event):
 
 
 @app.post('/item/create/<price>')
-def create_item(price: int):
+async def create_item(price: int):
     key = str(uuid.uuid4())
     app.logger.debug(f"Item: {key} created")
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
@@ -163,7 +173,7 @@ def create_item(price: int):
 
 
 @app.post('/batch_init/<n>/<starting_stock>/<item_price>')
-def batch_init_users(n: int, starting_stock: int, item_price: int):
+async def batch_init_users(n: int, starting_stock: int, item_price: int):
     n = int(n)
     starting_stock = int(starting_stock)
     item_price = int(item_price)
@@ -177,7 +187,7 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
 
 
 @app.get('/find/<item_id>')
-def find_item(item_id: str):
+async def find_item(item_id: str):
     item_entry: StockValue = get_item_from_db(item_id)
     return jsonify(
         {
@@ -188,7 +198,7 @@ def find_item(item_id: str):
 
 
 @app.post('/add/<item_id>/<amount>')
-def add_stock(item_id: str, amount: int):
+async def add_stock(item_id: str, amount: int):
     item_entry: StockValue = get_item_from_db(item_id)
     # update stock, serialize and update database
     item_entry.stock += int(amount)
@@ -200,11 +210,11 @@ def add_stock(item_id: str, amount: int):
 
 
 @app.post('/subtract/<item_id>/<amount>')
-def remove_stock(item_id: str, amount: int):
+async def remove_stock(item_id: str, amount: int):
     item_entry: StockValue = get_item_from_db(item_id)
     # update stock, serialize and update database
     item_entry.stock -= int(amount)
-    app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
+    # app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
     if item_entry.stock < 0:
         abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
     try:
@@ -215,6 +225,7 @@ def remove_stock(item_id: str, amount: int):
 
 
 if __name__ == '__main__':
+    # Start the consumer as an asyncio task
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
     gunicorn_logger = logging.getLogger('gunicorn.error')
