@@ -92,7 +92,7 @@ async def consume_kafka_events():
             continue
 
         event = json.loads(msgpack.decode(msg.value()))
-        logging.info(f'Received message:{event}')
+        #logging.info(f'Received message:{event}')
         asyncio.get_running_loop().create_task(handle_event(event))
 
 def start_consumer_thread():
@@ -166,7 +166,7 @@ async def create_order(user_id: str):
         db.set(key, value)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    logging.info(f"Order created successfully with ID: {key}")
+    #logging.info(f"Order created successfully with ID: {key}")
     return jsonify({'order_id': key})
 
 
