@@ -85,7 +85,7 @@ async def consume_kafka_events():
         event = json.loads(msgpack.decode(msg.value()))
         # logging.info(f'Received message:{event}')
         # handle_event(event)
-        asyncio.get_running_loop().create_task(handle_event(event))
+        await asyncio.get_running_loop().create_task(handle_event(event))
 
 
 def start_consumer_thread():
@@ -101,7 +101,8 @@ async def handle_event(event):
     user_id = event.get('user_id')
     amount = event.get('amount')
     if event_type == "payment":
-        if not await remove_credit(user_id, amount):
+        resp = await remove_credit(user_id, amount)
+        if not resp.status_code == 200:
             payment_fail_event = {
                 "event_type": "payment_fail",
                 "order_id": order_id,
@@ -191,7 +192,7 @@ async def add_credit(user_id: str, amount: int):
             """
 
     result = db.eval(lua_script, 0, json.dumps(user_id), json.dumps(amount))
-    return Response("Paymend added.", status=200) if result[0] == 1 else Response("Paymend failed to be added.", status=400)
+    return Response("Payment added.", status=200) if result[0] == 1 else Response("Payment failed to be added.", status=400)
 
 
 @app.post('/pay/<user_id>/<amount>')
@@ -213,7 +214,7 @@ async def remove_credit(user_id: str, amount: int):
                 """
 
     result = db.eval(lua_script, 0, json.dumps(user_id), json.dumps(amount))
-    return result[0] == 1
+    return Response("Payment subtracted.", status=200) if result[0] == 1 else Response("Payment failed to be subtracted.", status=400)
     
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
