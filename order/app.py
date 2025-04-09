@@ -65,7 +65,15 @@ while True:
     msg = log_consumer.poll(timeout=1.0)
     logging.info(f"log consumer processing {msg}")
     if msg is None:
-        break
+        # Wait for all partitions to reach EOF
+        if log_consumer.assignment():
+            positions = log_consumer.position(log_consumer.assignment())
+            #logging.info(f"Current positions: {positions}")
+            highwaters = log_consumer.get_watermark_offsets(log_consumer.assignment()[0])
+            #logging.info(f"Current highwaters: {highwaters}")
+            if all(pos.offset >= highwaters[1] for pos in positions):
+                break
+        continue
 
     # Decode and handle message
     transaction_event = json.loads(msgpack.decode(msg.value()))
