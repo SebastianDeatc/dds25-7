@@ -1,7 +1,11 @@
+import asyncio
+import functools
 import logging
 import os
 import atexit
 import uuid
+
+from quart import Quart, jsonify, abort, Response
 
 import redis
 import threading
@@ -9,7 +13,6 @@ import threading
 import json
 
 from msgspec import msgpack, Struct
-from flask import Flask, jsonify, abort, Response
 from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
@@ -33,7 +36,7 @@ consumer = Consumer({
     "auto.offset.reset": "earliest"
 })
 
-app = Flask("payment-service")
+app = Quart("payment-service")
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
@@ -64,33 +67,42 @@ def get_user_from_db(user_id: str) -> UserValue | None:
         abort(400, f"User: {user_id} not found!")
     return entry
 
-def consume_kafka_events():
-    logging.info("Kafka Consumer started...")
+async def async_consumer_poll(loop, timeout):
+    return await loop.run_in_executor(None, functools.partial(consumer.poll, timeout))
+
+async def consume_kafka_events():
+    # logging.info("Kafka Consumer started...")
     consumer.subscribe(['order-payment-event'])
 
     while True:
-        msg = consumer.poll(1.0)
+        msg = await async_consumer_poll(asyncio.get_event_loop(), 1.0)
         if msg is None:
             continue
         if msg.error():
-            logging.info(f"Kafka Consumer error: {msg.error()}")
+            # logging.info(f"Kafka Consumer error: {msg.error()}")
             continue
 
         event = json.loads(msgpack.decode(msg.value()))
-        logging.info(f'Received message:{event}')
-        handle_event(event)
+        # logging.info(f'Received message:{event}')
+        # handle_event(event)
+        await asyncio.get_running_loop().create_task(handle_event(event))
 
-thread = threading.Thread(target=consume_kafka_events, daemon=True)
-thread.start()
-logging.info("Kafka Consumer started in a separate thread.")
 
-def handle_event(event):
+def start_consumer_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(consume_kafka_events())
+
+threading.Thread(target=start_consumer_thread, daemon=True).start()
+
+async def handle_event(event):
     event_type = event.get('event_type')
     order_id = event.get('order_id')
     user_id = event.get('user_id')
     amount = event.get('amount')
     if event_type == "payment":
-        if not remove_credit(user_id, amount):
+        resp = await remove_credit(user_id, amount)
+        if not resp.status_code == 200:
             payment_fail_event = {
                 "event_type": "payment_fail",
                 "order_id": order_id,
@@ -109,7 +121,8 @@ def handle_event(event):
         producer.produce('payment-event', key = order_id, value=payment_ack_message)
         producer.flush()
     elif event_type == "refund_payment":
-        if not add_credit(user_id, amount).status_code == 200:
+        resp = await add_credit(user_id, amount)
+        if not resp.status_code == 200:
             refund_payment_fail_event = {
                 "event_type": "refund_payment_fail",
                 "order_id": order_id,
@@ -129,7 +142,7 @@ def handle_event(event):
         producer.flush()
 
 @app.post('/create_user')
-def create_user():
+async def create_user():
     key = str(uuid.uuid4())
     value = msgpack.encode(UserValue(credit=0))
     try:
@@ -140,7 +153,7 @@ def create_user():
 
 
 @app.post('/batch_init/<n>/<starting_money>')
-def batch_init_users(n: int, starting_money: int):
+async def batch_init_users(n: int, starting_money: int):
     n = int(n)
     starting_money = int(starting_money)
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money))
@@ -153,7 +166,7 @@ def batch_init_users(n: int, starting_money: int):
 
 
 @app.get('/find_user/<user_id>')
-def find_user(user_id: str):
+async def find_user(user_id: str):
     user_entry: UserValue = get_user_from_db(user_id)
     return jsonify(
         {
@@ -164,7 +177,7 @@ def find_user(user_id: str):
 
 
 @app.post('/add_funds/<user_id>/<amount>')
-def add_credit(user_id: str, amount: int):
+async def add_credit(user_id: str, amount: int):
     lua_script = """
                 local user_id = cjson.decode(ARGV[1])
                 local amount = cjson.decode(ARGV[2])
@@ -179,11 +192,11 @@ def add_credit(user_id: str, amount: int):
             """
 
     result = db.eval(lua_script, 0, json.dumps(user_id), json.dumps(amount))
-    return Response("Paymend added.", status=200) if result[0] == 1 else Response("Paymend failed to be added.", status=400)
+    return Response("Payment added.", status=200) if result[0] == 1 else Response("Payment failed to be added.", status=400)
 
 
 @app.post('/pay/<user_id>/<amount>')
-def remove_credit(user_id: str, amount: int):
+async def remove_credit(user_id: str, amount: int):
     lua_script = """
                     local user_id = cjson.decode(ARGV[1])
                     local amount = cjson.decode(ARGV[2])
@@ -201,7 +214,7 @@ def remove_credit(user_id: str, amount: int):
                 """
 
     result = db.eval(lua_script, 0, json.dumps(user_id), json.dumps(amount))
-    return result[0] == 1
+    return Response("Payment subtracted.", status=200) if result[0] == 1 else Response("Payment failed to be subtracted.", status=400)
     
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)

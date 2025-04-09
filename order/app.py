@@ -1,3 +1,5 @@
+import asyncio
+import functools
 import logging
 import os
 import atexit
@@ -11,7 +13,7 @@ import redis
 import requests
 
 from msgspec import msgpack, Struct
-from flask import Flask, jsonify, abort, Response
+from quart import Quart, jsonify, abort, Response
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
@@ -38,7 +40,7 @@ consumer = Consumer({
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
 
-app = Flask("order-service")
+app = Quart("order-service")
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
@@ -59,6 +61,8 @@ class OrderValue(Struct):
     user_id: str
     total_cost: int
 
+order_futures = {}
+order_futures_lock = asyncio.Lock()
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
     try:
@@ -73,12 +77,14 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
         abort(400, f"Order: {order_id} not found!")
     return entry
 
-def consume_kafka_events():
+async def async_consumer_poll(loop, timeout):
+    return await loop.run_in_executor(None, functools.partial(consumer.poll, timeout))
+
+async def consume_kafka_events():
     logging.info("Kafka Consumer started...")
     consumer.subscribe(['stock-event', 'payment-event'])
-
     while True:
-        msg = consumer.poll(1.0)
+        msg = await async_consumer_poll(asyncio.get_event_loop(), 1.0)
         if msg is None:
             continue
         if msg.error():
@@ -86,17 +92,27 @@ def consume_kafka_events():
             continue
 
         event = json.loads(msgpack.decode(msg.value()))
-        logging.info(f'Received message:{event}')
-        handle_event(event)
+        #logging.info(f'Received message:{event}')
+        asyncio.get_running_loop().create_task(handle_event(event))
 
-thread = threading.Thread(target=consume_kafka_events, daemon=True)
-thread.start()
-logging.info("Kafka Consumer started in a separate thread.")
+def start_consumer_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(consume_kafka_events())
 
-def handle_event(event):
+threading.Thread(target=start_consumer_thread, daemon=True).start()
+
+
+async def handle_event(event):
     event_type = event.get('event_type')
     order_id = event.get('order_id')
     user_id = event.get('user_id')
+
+    async def update_order_result(status, message):
+        async with order_futures_lock:
+            future = order_futures.get(order_id)
+            if future and not future.done():
+                future.set_result((status, message))
 
     if event_type == 'payment_success':
         # payment was successfully completed so move on to checking stock
@@ -114,17 +130,21 @@ def handle_event(event):
         producer.produce('order-stock-event', key=order_id, value=msgpack.encode(json.dumps(check_stock_event)))
         producer.flush()
     elif event_type == 'payment_fail':
-        abort(400, f"Not enough balance! Order {order_id} did not go through")
-    elif event_type == 'refund_balance_success':
-        abort(400, f"Not enough balance! Refunded your order {order_id}.")
+        await update_order_result(400, f"Not enough balance! Order {order_id} did not go through")
+        # logging.error(f"Payment failed for order {order_id}")
+    elif event_type == 'refund_payment_success':
+        await update_order_result(400, f"Not enough balance! Refunded your order {order_id}.")
+        # logging.error(f"Refund processed for order {order_id} indicates a failure")
     elif event_type == 'check_stock_ack':
+        # logging.info('In check stock ack')
         success = event.get('success')
         if success:
             # if stock check suceeded checkout is successfully completed
-            logging.info(f"Checkout complete: {order_id}")
-            return Response(f"Checkout complete: {order_id}", status = 200)
+            await update_order_result(200, f"Checkout complete: {order_id}")
+            # logging.info(f"Checkout complete: {order_id}")
         else:
             # if the stock check fails we should refund the order
+            # logging.info('In handle event, refunding')
             order_entry = get_order_from_db(order_id)
             refund_event = {
                 'event_type': "refund_payment",
@@ -133,22 +153,25 @@ def handle_event(event):
                 'amount': order_entry.total_cost
             }
             producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(refund_event)))
-            abort(400, f"Failed to reserve stock for order {order_id}.")
+            producer.flush()
+            await update_order_result(400, f"Failed to reserve stock for order {order_id}.")
+    else:
+        logging.warning(f"Unhandled event type: {event_type} for order {order_id}")
 
-
-@app.post('/create/<user_id>')
-def create_order(user_id: str):
+@app.route('/create/<user_id>', methods=['POST'])
+async def create_order(user_id: str):
     key = str(uuid.uuid4())
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
+    #logging.info(f"Order created successfully with ID: {key}")
     return jsonify({'order_id': key})
 
 
-@app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
-def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
+@app.route('/batch_init/<n>/<n_items>/<n_users>/<item_price>', methods=['POST'])
+async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
 
     n = int(n)
     n_items = int(n_items)
@@ -174,8 +197,8 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     return jsonify({"msg": "Batch init for orders successful"})
 
 
-@app.get('/find/<order_id>')
-def find_order(order_id: str):
+@app.route('/find/<order_id>', methods=['GET'])
+async def find_order(order_id: str):
     order_entry: OrderValue = get_order_from_db(order_id)
     return jsonify(
         {
@@ -204,10 +227,10 @@ def send_get_request(url: str):
         abort(400, REQ_ERROR_STR)
     else:
         return response
+    
 
-
-@app.post('/addItem/<order_id>/<item_id>/<quantity>')
-def add_item(order_id: str, item_id: str, quantity: int):
+@app.route('/addItem/<order_id>/<item_id>/<quantity>', methods=['POST'])
+async def add_item(order_id: str, item_id: str, quantity: int):
     order_entry: OrderValue = get_order_from_db(order_id)
     item_reply = send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
     if item_reply.status_code != 200:
@@ -229,11 +252,15 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
         send_post_request(f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}")
 
 
-@app.post('/checkout/<order_id>')
-def checkout(order_id: str):
-    app.logger.debug(f"Checking out {order_id}")
+@app.route('/checkout/<order_id>', methods=['POST'])
+async def checkout(order_id: str):
+    # app.logger.debug(f"Checking out {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
 
+    async with order_futures_lock:
+        future = asyncio.Future()
+        order_futures[order_id] = future
+    
     # create and send the payment event message to payment microservice
     payment_event = {
         'event_type': "payment",
@@ -242,9 +269,20 @@ def checkout(order_id: str):
         'amount': order_entry.total_cost
     }
     producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(payment_event)))
-
-    return 'OK' # doesn't actually return an OK HTTP response, just placeholder
-
+    producer.flush()
+    try:
+        # await the future result with a timeout.
+        # logging.info('awaiting for future in checkout')
+        status_code, message = await asyncio.wait_for(future, timeout=10)
+    except asyncio.TimeoutError:
+        async with order_futures_lock:
+            order_futures.pop(order_id, None)
+        abort(408, f"Timeout waiting for event for order {order_id}")
+    async with order_futures_lock:
+        order_futures.pop(order_id, None)
+    if message is None:
+        abort(500, "Internal error: event signaled but no result found")
+    return Response(message, status=status_code)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
@@ -252,3 +290,4 @@ else:
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level)
+
