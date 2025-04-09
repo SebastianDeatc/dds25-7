@@ -30,7 +30,60 @@ logging.info("Kafka producer initialized successfully.")
 admin_client = AdminClient({'bootstrap.servers': KAFKA_BROKER})
 os_topic = NewTopic('order-stock-event', num_partitions=3, replication_factor=1)
 op_topic = NewTopic('order-payment-event', num_partitions=3, replication_factor=1)
-fs = admin_client.create_topics([os_topic, op_topic])
+
+transaction_log_topic = NewTopic(
+    'transaction-log',
+    num_partitions=1,
+    replication_factor=1,
+    config={'cleanup.policy': 'compact'}  # Enables log compaction
+)
+
+fs = admin_client.create_topics([os_topic, op_topic, transaction_log_topic])
+
+db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
+                              port=int(os.environ['REDIS_PORT']),
+                              password=os.environ['REDIS_PASSWORD'],
+                              db=int(os.environ['REDIS_DB']))
+
+log_consumer = Consumer({
+    "bootstrap.servers":KAFKA_BROKER,
+    "group.id": "logs-order-service-group",
+    "enable.auto.commit": False,
+    "auto.offset.reset": "earliest"
+})
+
+def handle_log(transaction_event):
+    order_id = transaction_event.get('order_id')
+    step = transaction_event.get('step')
+    return
+
+log_consumer.subscribe(["transaction-log"])
+logging.info("Log Consumer started")
+
+
+while True:
+    msg = log_consumer.poll(timeout=1.0)
+    logging.info(f"log consumer processing {msg}")
+    if msg is None:
+        break
+
+    # Decode and handle message
+    transaction_event = json.loads(msgpack.decode(msg.value()))
+    status = transaction_event.get('status')
+
+    order_id = transaction_event.get('order_id')
+    step = transaction_event.get('step')
+    logging.info(f"order {order_id}, status: {status}, step: {step}")
+
+    # Only handle if not completed
+    if status != "COMPLETED":
+        handle_log(transaction_event)
+
+    # Manually commit the offset if needed
+    log_consumer.commit(msg)
+
+log_consumer.close()
+logging.info("Log Consumer closed")
 
 consumer = Consumer({
     "bootstrap.servers":KAFKA_BROKER,
@@ -42,10 +95,6 @@ GATEWAY_URL = os.environ['GATEWAY_URL']
 
 app = Quart("order-service")
 
-db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-                              port=int(os.environ['REDIS_PORT']),
-                              password=os.environ['REDIS_PASSWORD'],
-                              db=int(os.environ['REDIS_DB']))
 
 
 def close_db_connection():
@@ -101,7 +150,6 @@ def start_consumer_thread():
     loop.run_until_complete(consume_kafka_events())
 
 threading.Thread(target=start_consumer_thread, daemon=True).start()
-
 
 async def handle_event(event):
     event_type = event.get('event_type')
@@ -260,7 +308,8 @@ async def checkout(order_id: str):
     async with order_futures_lock:
         future = asyncio.Future()
         order_futures[order_id] = future
-    
+
+
     # create and send the payment event message to payment microservice
     payment_event = {
         'event_type': "payment",
@@ -269,6 +318,13 @@ async def checkout(order_id: str):
         'amount': order_entry.total_cost
     }
     producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(payment_event)))
+    producer.flush()
+    log = {
+        "order_id": order_id,
+        "status": "PENDING",
+        "step": "CHECKOUT STARTED"
+    }
+    producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(log)))
     producer.flush()
     try:
         # await the future result with a timeout.
