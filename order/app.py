@@ -91,7 +91,7 @@ while True:
     logging.info(f"order {order_id}, status: {status}, step: {step}")
 
     # Only handle if not completed
-    if status != "COMPLETED":
+    if status == "PENDING":
         handle_log(transaction_event)
 
     # Manually commit the offset if needed
