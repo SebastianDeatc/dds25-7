@@ -4,6 +4,7 @@ import logging
 import os
 import atexit
 import uuid
+import requests
 
 from quart import Quart, jsonify, abort, Response
 
@@ -20,6 +21,9 @@ from confluent_kafka.admin import AdminClient, NewTopic
 logging.basicConfig(level=logging.INFO)
 
 DB_ERROR_STR = "DB error"
+REQ_ERROR_STR = "Requests error"
+
+GATEWAY_URL = os.environ['GATEWAY_URL']
 
 KAFKA_BROKER = os.environ['KAFKA_BROKER']
 
@@ -141,6 +145,29 @@ async def handle_event(event):
         producer.produce('payment-event', key = order_id, value=refund_payment_ack_message)
         producer.flush()
 
+
+def pause_order_consumer():
+    try:
+        response = requests.post(f"{GATEWAY_URL}/orders/consumer/pause")
+        if response.status_code == 200:
+            print("Consumer paused successfully")
+        else:
+            print(f"Failed to pause consumer: {response.text}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
+def resume_order_consumer():
+    try:
+        response = requests.post(f"{GATEWAY_URL}/orders/consumer/resume")
+        if response.status_code == 200:
+            print("Consumer paused successfully")
+        else:
+            print(f"Failed to pause consumer: {response.text}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
 @app.post('/create_user')
 async def create_user():
     key = str(uuid.uuid4())
@@ -151,6 +178,15 @@ async def create_user():
         return abort(400, DB_ERROR_STR)
     return jsonify({'user_id': key})
 
+@app.post('/pause')
+def pause():
+    pause_order_consumer()
+    return jsonify({"msg": "paused"})
+
+@app.post('/resume')
+def resume():
+    resume_order_consumer()
+    return jsonify({"msg": "resumed"})
 
 @app.post('/batch_init/<n>/<starting_money>')
 async def batch_init_users(n: int, starting_money: int):
