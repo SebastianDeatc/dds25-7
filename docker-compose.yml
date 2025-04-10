@@ -52,19 +52,18 @@ services:
     image: order:latest
     environment:
       - GATEWAY_URL=http://gateway:80
-      - KAFKA_BROKER=kafka:9092  # Kafka broker environment variable
-    # command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+      - KAFKA_BROKER=kafka:9092
+      - PYTHONPATH=/home/flask-app
     volumes:
-    - .:/home/flask-app  # Mount the project root into /home/flask-app
+      - ./order:/home/flask-app
     command: gunicorn -k uvicorn.workers.UvicornWorker -b 0.0.0.0:5000 --timeout 30 --log-level=info app:app
-
     env_file:
       - env/order_redis.env
     depends_on:
       order-db:
-          condition: service_started
-      kafka:  # Ensure Kafka starts first
-          condition: service_healthy
+        condition: service_started
+      kafka:
+        condition: service_healthy
     networks:
       - kafka-network
 
@@ -79,19 +78,17 @@ services:
     image: stock:latest
     environment:
       - PYTHONPATH=/home/flask-app
-      - KAFKA_BROKER=kafka:9092  # Kafka broker environment variable
-    # command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+      - KAFKA_BROKER=kafka:9092
     volumes:
-    - .:/home/flask-app  # Mount the project root into /home/flask-app
+      - ./stock:/home/flask-app
     command: gunicorn -k uvicorn.workers.UvicornWorker -b 0.0.0.0:5000 --timeout 30 --log-level=info app:app
-
     env_file:
       - env/stock_redis.env
     depends_on:
       order-db:
         condition: service_started
-      kafka: # Ensure Kafka starts first
-        condition: service_healthy # Ensure Kafka starts first
+      kafka:
+        condition: service_healthy
     networks:
       - kafka-network
 
@@ -103,20 +100,20 @@ services:
 
   payment-service:
     build: ./payment
-    image: user:latest
+    image: payment:latest
     environment:
-      - KAFKA_BROKER=kafka:9092  # Kafka broker environment variable
-    # command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+      - PYTHONPATH=/home/flask-app
+      - KAFKA_BROKER=kafka:9092
     volumes:
-    - .:/home/flask-app  # Mount the project root into /home/flask-app
+      - ./payment:/home/flask-app
     command: gunicorn -k uvicorn.workers.UvicornWorker -b 0.0.0.0:5000 --timeout 30 --log-level=info app:app
     env_file:
       - env/payment_redis.env
     depends_on:
       order-db:
         condition: service_started
-      kafka: # Ensure Kafka starts first
-        condition: service_healthy # Ensure Kafka starts first
+      kafka:
+        condition: service_healthy
     networks:
       - kafka-network
 

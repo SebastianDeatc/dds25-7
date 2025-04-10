@@ -27,7 +27,7 @@ project_root = os.path.abspath(os.path.join(current_dir, '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from ..log import save_log
+from log import save_log
 
 logging.basicConfig(level=logging.INFO)
 
@@ -113,12 +113,21 @@ async def handle_event(event):
     user_id = event.get('user_id')
     amount = event.get('amount')
     if event_type == "payment":
+        # Decode the previous value from Redis
+        previous_value_bytes = db.get(user_id)
+        previous_value = None
+        if previous_value_bytes:
+            try:
+                previous_value = msgpack.decode(previous_value_bytes)  # Deserialize if it's msgpack-encoded
+            except Exception:
+                previous_value = previous_value_bytes.decode('utf-8')  # Fallback to UTF-8 decoding
+
         pre_payment_log = {
             "order_id": order_id,
             "timestamp": time.time(),
             "status": "PENDING",
             "event": event,
-            "previous_value": db.get(user_id), 
+            "previous_value": previous_value,  # Ensure this is JSON-serializable
             "service": "PAYMENT"
         }
         save_log(pre_payment_log)
@@ -135,14 +144,6 @@ async def handle_event(event):
             }
             payment_ack_message = msgpack.encode(json.dumps(payment_fail_event))
         else:
-            # post_payment_log = {
-            #     "order_id": order_id,
-            #     "status": "PENDING",
-            #     "step": "POST_PAYMENT"
-            # }
-            # producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(post_payment_log)))
-            # producer.flush()
-
             payment_success_event = {
                 "event_type": "payment_success",
                 "order_id": order_id,
@@ -151,7 +152,7 @@ async def handle_event(event):
             }
             payment_ack_message = msgpack.encode(json.dumps(payment_success_event))
 
-        producer.produce('payment-event', key = order_id, value=payment_ack_message)
+        producer.produce('payment-event', key=order_id, value=payment_ack_message)
         producer.flush()
     elif event_type == "refund_payment":
         resp = await add_credit(user_id, amount)
