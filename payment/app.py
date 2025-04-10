@@ -193,6 +193,24 @@ async def handle_event(event):
         producer.produce('payment-event', key = order_id, value=refund_payment_ack_message)
         producer.flush()
 
+def on_startup():
+    # pause_order_consumer()
+
+    # go through the log file and find the latest (via timestamp) CHECKOUT_COMPLETED log
+
+    # filter the remaining logs such that only logs with a higher (later) timestamp remain
+
+    # IF there are 0 remaining logs -> no compensating actions needed, return
+    # ELSE -> find the latest log that belongs to the PAYMENT service
+    
+    # IF this log is a PAYMENT_COMPLETED log -> refund the payment and return
+    # ELSE (it has to be PAYMENT_PENDING log) -> using the previous value field in the log json
+        # evaluate if the payment database needs to be corrected and act accordingly, return
+
+    # resume_order_consumer()
+    pass
+
+
 @app.post('/create_user')
 async def create_user():
     key = str(uuid.uuid4())

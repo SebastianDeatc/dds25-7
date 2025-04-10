@@ -185,6 +185,23 @@ async def handle_event(event):
         producer.produce('stock-event', key= order_id, value=msgpack.encode(json.dumps(check_stock_ack)))
         producer.flush()
 
+def on_startup():
+    # pause_order_consumer()
+
+    # go through the log file and find the latest (via timestamp) CHECKOUT_COMPLETED log
+
+    # filter the remaining logs such that only logs with a higher (later) timestamp remain
+
+    # IF there are 0 remaining logs -> no compensating actions needed, return
+    # ELSE -> find the latest log that belongs to the STOCK service
+    
+    # IF this log is a STOCK_COMPLETED log -> both payment and stock events went through so all
+        # we have to do is correct the logs, manually write CHECKOUT_COMPLETED log to the file and return
+    # ELSE (it has to be STOCK_PENDING log) -> using the previous value field in the log json evaluate if the 
+        # stock database needs to be corrected and act accordingly + refund the payment, return
+
+    # resume_order_consumer()
+    pass
 
 @app.post('/item/create/<price>')
 async def create_item(price: int):

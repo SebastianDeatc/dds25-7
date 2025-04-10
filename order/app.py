@@ -273,6 +273,28 @@ async def handle_event(event):
     else:
         logging.warning(f"Unhandled event type: {event_type} for order {order_id}")
 
+def on_startup():
+    # go through the log file and find the latest (via timestamp) CHECKOUT_COMPLETED log
+
+    # filter the remaining logs such that only logs with a higher (later) timestamp remain
+
+    # IF there are 0 remaining logs -> no compensating actions needed, return
+    # ELSE -> find the latest log
+
+    # IF it is a PAYMENT_PENDING log -> using the previous value field in the log json evaluate if 
+        # the payment database needs to be corrected and act accordingly, return (this should just 
+        # send a post request to an endpoint in payment service like 'refund_if_needed(info_from_log_json)')
+    # ELIF it is a PAYMENT_COMPLETED log -> refund payment, return
+    # ELIF it is a STOCK_PENDING log -> using the previous value field in the log json evaluate if 
+        # the stock database needs to be corrected and act accordingly, refund the payment, return
+        # (this should just send a post request to an endpoint in stock service like 'refund_if_needed(info_from_log_json)')
+    # ELSE (it has to be a STOCK_COMPLETED log -> both payment and stock events went through so all
+        # we have to do is correct the logs, manually write CHECKOUT_COMPLETED log to the file and return
+
+    # clear the consumers/message queue because we rollback any transaction that wasn't fully
+    # completed so we should disregard the messages from previous transactions
+    pass
+
 @app.route('/create/<user_id>', methods=['POST'])
 async def create_order(user_id: str):
     key = str(uuid.uuid4())
