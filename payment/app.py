@@ -4,6 +4,7 @@ import logging
 import os
 import atexit
 import uuid
+import time
 
 from quart import Quart, jsonify, abort, Response
 
@@ -101,18 +102,21 @@ async def handle_event(event):
     user_id = event.get('user_id')
     amount = event.get('amount')
     if event_type == "payment":
-        # pre_payment_log = {
-        #     "order_id": order_id,
-        #     "status": "PENDING",
-        #     "step": "PRE_PAYMENT"
-        # }
-        # producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(pre_payment_log)))
-        # producer.flush()
+        pre_payment_log = {
+            "order_id": order_id,
+            "timestamp": time.time(),
+            "status": "PENDING",
+            "event": event,
+            "previous_value": db.get(user_id), 
+            "service": "PAYMENT"
+        }
+        producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(payment_commit_log)))
+        producer.flush()
 
         resp = await remove_credit(user_id, amount)
         if not resp.status_code == 200:
             payment_fail_event = {
-                "event_type": "payment_fail",
+                "event_type": "payment_fail", 
                 "order_id": order_id,
                 "user_id": user_id,
                 "amount": amount

@@ -7,6 +7,7 @@ import uuid
 import threading
 import redis
 import json
+import time
 
 from msgspec import msgpack, Struct
 from quart import Quart, jsonify, abort, Response
@@ -101,6 +102,17 @@ async def handle_event(event):
     if event_type == "check_stock":
         items = event.get('items')
         # logging.info(f"items: {items}, type: {type(items)}")
+
+        pre_stock_log = {
+            "order_id": order_id,
+            "timestamp": time.time(),
+            "status": "PENDING",
+            "event": event,
+            "previous_value": db.get(user_id), 
+            "service": "STOCK"
+        }
+        producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(pre_stock_log)))
+        producer.flush()
 
         lua_script = """
                         local items = cjson.decode(ARGV[1])

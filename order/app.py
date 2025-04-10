@@ -188,6 +188,16 @@ async def handle_event(event):
         for item_id, quantity in order_entry.items:
             items_quantities[item_id] += quantity
 
+        payment_commit_log = {
+            "order_id": order_id,
+            "timestamp": time.time(),
+            "status": "COMPLETED",
+            "event": event,
+            "service": "PAYMENT"
+        }
+        producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(payment_commit_log)))
+        producer.flush()
+
         check_stock_event = {
             "event_type": "check_stock",
             "order_id": order_id,
@@ -205,6 +215,15 @@ async def handle_event(event):
     elif event_type == 'check_stock_ack':
         # logging.info('In check stock ack')
         success = event.get('success')
+        stock_commit_log = {
+            "order_id": order_id,
+            "timestamp": time.time(),
+            "status": "COMPLETED",
+            "event": event,
+            "service": "STOCK"
+        }
+        producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(stock_commit_log)))
+        producer.flush()
         if success:
             # if stock check suceeded checkout is successfully completed
             await update_order_result(200, f"Checkout complete: {order_id}")
@@ -357,6 +376,15 @@ async def checkout(order_id: str):
         order_futures.pop(order_id, None)
     if message is None:
         abort(500, "Internal error: event signaled but no result found")
+
+    checkout_commit_log = {
+            "order_id": order_id,
+            "timestamp": time.time(),
+            "status": "CHECKOUT_COMPLETED",
+            "service": "ORDER"
+    }
+    producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(checkout_commit_log)))
+    producer.flush() 
     return Response(message, status=status_code)
 
 if __name__ == '__main__':
