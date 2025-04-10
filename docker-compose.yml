@@ -54,6 +54,8 @@ services:
       - GATEWAY_URL=http://gateway:80
       - KAFKA_BROKER=kafka:9092  # Kafka broker environment variable
     # command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+    volumes:
+    - .:/home/flask-app  # Mount the project root into /home/flask-app
     command: gunicorn -k uvicorn.workers.UvicornWorker -b 0.0.0.0:5000 --timeout 30 --log-level=info app:app
 
     env_file:
@@ -76,8 +78,11 @@ services:
     build: ./stock
     image: stock:latest
     environment:
+      - PYTHONPATH=/home/flask-app
       - KAFKA_BROKER=kafka:9092  # Kafka broker environment variable
     # command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+    volumes:
+    - .:/home/flask-app  # Mount the project root into /home/flask-app
     command: gunicorn -k uvicorn.workers.UvicornWorker -b 0.0.0.0:5000 --timeout 30 --log-level=info app:app
 
     env_file:
@@ -102,6 +107,8 @@ services:
     environment:
       - KAFKA_BROKER=kafka:9092  # Kafka broker environment variable
     # command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+    volumes:
+    - .:/home/flask-app  # Mount the project root into /home/flask-app
     command: gunicorn -k uvicorn.workers.UvicornWorker -b 0.0.0.0:5000 --timeout 30 --log-level=info app:app
     env_file:
       - env/payment_redis.env

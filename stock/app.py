@@ -3,10 +3,12 @@ import functools
 import logging
 import os
 import atexit
+import sys
 import uuid
 import threading
 import redis
 import json
+import time
 
 from msgspec import msgpack, Struct
 from quart import Quart, jsonify, abort, Response
@@ -14,6 +16,16 @@ from quart import Quart, jsonify, abort, Response
 from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
+
+# from ..log import save_log
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, '..'))
+
+# Insert the project root directory at the beginning of sys.path if it's not already there.
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from log import save_log
 
 logging.basicConfig(level=logging.INFO)
 
@@ -98,33 +110,21 @@ async def handle_event(event):
     event_type = event.get('event_type')
     order_id = event.get('order_id')
     user_id = event.get('user_id')
-    # if event_type == "check_stock":
-    #     items = event.get('items')
-    #     success = True
-    #     for item_id, quantity in items.items():
-    #         if success:
-    #             stock = get_item_from_db(item_id).stock
-    #             available = stock - quantity > 0
-    #             if available:
-    #                 logging.info(f"Locking item: {item_id}")
-    #                 #TODO: lock
-    #             else:
-    #                 logging.info(f"Item {item_id} not available")
-    #                 #TODO: release locks
-    #                 success = False
-    #                 break
-
-    #     check_stock_ack = {
-    #         "event_type": "check_stock_ack",
-    #         "order_id": order_id,
-    #         "user_id": user_id,
-    #         "success": success
-    #     }
-    #     producer.produce('stock-event', key= order_id, value=msgpack.encode(json.dumps(check_stock_ack)))
-    #     producer.flush()
     if event_type == "check_stock":
         items = event.get('items')
         # logging.info(f"items: {items}, type: {type(items)}")
+
+        pre_stock_log = {
+            "order_id": order_id,
+            "timestamp": time.time(),
+            "status": "PENDING",
+            "event": event,
+            "previous_value": db.get(user_id), 
+            "service": "STOCK"
+        }
+        # producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(pre_stock_log)))
+        # producer.flush()
+        save_log(pre_stock_log)
 
         lua_script = """
                         local items = cjson.decode(ARGV[1])
