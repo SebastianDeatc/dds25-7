@@ -18,15 +18,32 @@ from quart import Quart, jsonify, abort, Response
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
-# One way is to go one level up from the current file's directory.
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(current_dir, '..'))
+def save_log(new_entry):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    log_file = os.path.join(current_dir, 'logs.json')
+    logging.info(f'log_file is: {log_file}')
+    logging.info(f'path to log file is: {current_dir}')
+    try:
+        # Try reading the current log data; if the file doesn't exist or is empty, start with an empty list.
+        try:
+            with open(log_file, 'r') as f:
+                logs = json.load(f)
+                logging.info(f'log is: {logs}')
+                if not isinstance(logs, list):
+                    logs = []
+        except (FileNotFoundError, json.JSONDecodeError):
+            logs = []
+            logging.error('FILE NOT FOUND OR SOMETHING')
+        # Append the new log entry
+        logs.append(new_entry)
+        
+        # Write back the updated log list
+        with open(log_file, 'w') as f:
+            json.dump(logs, f, indent=4)
+            logging.info(f'logs are: {logs}')
 
-# Insert the project root directory at the beginning of sys.path if it's not already there.
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-from log import save_log
+    except Exception as e:
+        logging.error(f"Error saving log: {e}")
 
 
 logging.basicConfig(level=logging.INFO)
@@ -399,12 +416,9 @@ async def checkout(order_id: str):
     return Response(message, status=status_code)
 
 if __name__ == '__main__':
-    print("Current directory:", current_dir)
-    print("Project root:", project_root)
-    save_log({'a': 1})
-    # app.run(host="0.0.0.0", port=8000, debug=True)
-# else:
-#     gunicorn_logger = logging.getLogger('gunicorn.error')
-#     app.logger.handlers = gunicorn_logger.handlers
-#     app.logger.setLevel(gunicorn_logger.level)
+    app.run(host="0.0.0.0", port=8000, debug=True)
+else:
+    gunicorn_logger = logging.getLogger('gunicorn.error')
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(gunicorn_logger.level)
 
