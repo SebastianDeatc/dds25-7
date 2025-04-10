@@ -60,6 +60,13 @@ def handle_log(transaction_event):
 log_consumer.subscribe(["transaction-log"])
 logging.info("Log Consumer started")
 
+dummy_log = {
+        "order_id": "DUMMY_ORDER_ID",
+        "status": "DUMMY_STATUS",
+        "step": "DUMMY_STEP"
+    }
+producer.produce('transaction-log', key="DUMMY_ORDER_ID", value=msgpack.encode(json.dumps(dummy_log)))
+producer.flush()
 
 while True:
     msg = log_consumer.poll(timeout=1.0)
@@ -68,9 +75,9 @@ while True:
         # Wait for all partitions to reach EOF
         if log_consumer.assignment():
             positions = log_consumer.position(log_consumer.assignment())
-            #logging.info(f"Current positions: {positions}")
+            logging.info(f"Current positions: {positions}")
             highwaters = log_consumer.get_watermark_offsets(log_consumer.assignment()[0])
-            #logging.info(f"Current highwaters: {highwaters}")
+            logging.info(f"Current highwaters: {highwaters}")
             if all(pos.offset >= highwaters[1] for pos in positions):
                 break
         continue
@@ -330,7 +337,7 @@ async def checkout(order_id: str):
     log = {
         "order_id": order_id,
         "status": "PENDING",
-        "step": "CHECKOUT STARTED"
+        "step": "CHECKOUT_STARTED"
     }
     producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(log)))
     producer.flush()
