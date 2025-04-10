@@ -101,6 +101,14 @@ async def handle_event(event):
     user_id = event.get('user_id')
     amount = event.get('amount')
     if event_type == "payment":
+        # pre_payment_log = {
+        #     "order_id": order_id,
+        #     "status": "PENDING",
+        #     "step": "PRE_PAYMENT"
+        # }
+        # producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(pre_payment_log)))
+        # producer.flush()
+
         resp = await remove_credit(user_id, amount)
         if not resp.status_code == 200:
             payment_fail_event = {
@@ -111,6 +119,14 @@ async def handle_event(event):
             }
             payment_ack_message = msgpack.encode(json.dumps(payment_fail_event))
         else:
+            # post_payment_log = {
+            #     "order_id": order_id,
+            #     "status": "PENDING",
+            #     "step": "POST_PAYMENT"
+            # }
+            # producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(post_payment_log)))
+            # producer.flush()
+
             payment_success_event = {
                 "event_type": "payment_success",
                 "order_id": order_id,
@@ -118,6 +134,7 @@ async def handle_event(event):
                 "amount": amount
             }
             payment_ack_message = msgpack.encode(json.dumps(payment_success_event))
+
         producer.produce('payment-event', key = order_id, value=payment_ack_message)
         producer.flush()
     elif event_type == "refund_payment":

@@ -55,7 +55,10 @@ log_consumer = Consumer({
 def handle_log(transaction_event):
     order_id = transaction_event.get('order_id')
     step = transaction_event.get('step')
-    return
+
+    # Checkout started but we did not arrive at payment step, so we
+    if step == "CHECKOUT_STARTED":
+
 
 log_consumer.subscribe(["transaction-log"])
 logging.info("Log Consumer started")
@@ -91,8 +94,9 @@ while True:
     logging.info(f"order {order_id}, status: {status}, step: {step}")
 
     # Only handle if not completed
-    if status == "PENDING":
-        handle_log(transaction_event)
+    # TODO: UNCOMMENT THIS
+    # if status == "PENDING":
+    #     handle_log(transaction_event)
 
     # Manually commit the offset if needed
     log_consumer.commit(msg)
@@ -334,13 +338,13 @@ async def checkout(order_id: str):
     }
     producer.produce('order-payment-event', key=order_id, value=msgpack.encode(json.dumps(payment_event)))
     producer.flush()
-    log = {
-        "order_id": order_id,
-        "status": "PENDING",
-        "step": "CHECKOUT_STARTED"
-    }
-    producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(log)))
-    producer.flush()
+    # log = {
+    #     "order_id": order_id,
+    #     "status": "PENDING",
+    #     "step": "CHECKOUT_STARTED"
+    # }
+    # producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(log)))
+    # producer.flush()
     try:
         # await the future result with a timeout.
         # logging.info('awaiting for future in checkout')
