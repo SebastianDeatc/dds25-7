@@ -16,6 +16,7 @@ from msgspec import msgpack, Struct
 from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
+from redis.sentinel import Sentinel
 
 logging.basicConfig(level=logging.INFO)
 
@@ -38,10 +39,21 @@ consumer = Consumer({
 
 app = Quart("payment-service")
 
-db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-                              port=int(os.environ['REDIS_PORT']),
-                              password=os.environ['REDIS_PASSWORD'],
-                              db=int(os.environ['REDIS_DB']))
+
+SENTINEL_HOST = os.getenv("REDIS_SENTINEL_HOST")
+SENTINEL_PORT = int(os.getenv("REDIS_SENTINEL_PORT"))
+MASTER_NAME = os.getenv("REDIS_MASTER_NAME")
+REDIS_PASS = os.getenv("REDIS_PASSWORD")
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+
+sentinel = Sentinel(
+    [(SENTINEL_HOST, SENTINEL_PORT)],
+    socket_timeout=1.0,
+    password=REDIS_PASS
+)
+db = sentinel.master_for(MASTER_NAME, socket_timeout=1.0, db=REDIS_DB, password=REDIS_PASS)
+
+
 
 def close_db_connection():
     db.close()
@@ -215,7 +227,12 @@ async def remove_credit(user_id: str, amount: int):
 
     result = db.eval(lua_script, 0, json.dumps(user_id), json.dumps(amount))
     return Response("Payment subtracted.", status=200) if result[0] == 1 else Response("Payment failed to be subtracted.", status=400)
-    
+
+
+@app.route("/health", methods=["GET"])
+async def health():
+    return "OK", 200
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:

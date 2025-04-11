@@ -14,6 +14,7 @@ from quart import Quart, jsonify, abort, Response
 from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
+from redis.sentinel import Sentinel
 
 logging.basicConfig(level=logging.INFO)
 
@@ -37,10 +38,19 @@ consumer = Consumer({
 
 app = Quart("stock-service")
 
-db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-                              port=int(os.environ['REDIS_PORT']),
-                              password=os.environ['REDIS_PASSWORD'],
-                              db=int(os.environ['REDIS_DB']))
+
+SENTINEL_HOST = os.getenv("REDIS_SENTINEL_HOST")
+SENTINEL_PORT = int(os.getenv("REDIS_SENTINEL_PORT"))
+MASTER_NAME = os.getenv("REDIS_MASTER_NAME")
+REDIS_PASS = os.getenv("REDIS_PASSWORD")
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+
+sentinel = Sentinel(
+    [(SENTINEL_HOST, SENTINEL_PORT)],
+    socket_timeout=1.0,
+    password=REDIS_PASS
+)
+db = sentinel.master_for(MASTER_NAME, socket_timeout=1.0, db=REDIS_DB, password=REDIS_PASS)
 
 def close_db_connection():
     db.close()
@@ -222,6 +232,11 @@ async def remove_stock(item_id: str, amount: int):
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
     return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
+
+@app.route("/health", methods=["GET"])
+async def health():
+    return "OK", 200
+
 
 
 if __name__ == '__main__':

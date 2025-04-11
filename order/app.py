@@ -12,10 +12,12 @@ import time
 import redis
 import requests
 
+
 from msgspec import msgpack, Struct
 from quart import Quart, jsonify, abort, Response
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
+from redis.sentinel import Sentinel
 
 logging.basicConfig(level=logging.INFO)
 
@@ -42,10 +44,22 @@ GATEWAY_URL = os.environ['GATEWAY_URL']
 
 app = Quart("order-service")
 
-db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-                              port=int(os.environ['REDIS_PORT']),
-                              password=os.environ['REDIS_PASSWORD'],
-                              db=int(os.environ['REDIS_DB']))
+
+
+SENTINEL_HOST = os.getenv("REDIS_SENTINEL_HOST")
+SENTINEL_PORT = int(os.getenv("REDIS_SENTINEL_PORT"))
+MASTER_NAME = os.getenv("REDIS_MASTER_NAME")
+REDIS_PASS = os.getenv("REDIS_PASSWORD")
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+
+sentinel = Sentinel(
+    [(SENTINEL_HOST, SENTINEL_PORT)],
+    socket_timeout=1.0,
+    password=REDIS_PASS
+)
+db = sentinel.master_for(MASTER_NAME, socket_timeout=1.0, db=REDIS_DB, password=REDIS_PASS)
+
+
 
 
 def close_db_connection():
@@ -283,6 +297,10 @@ async def checkout(order_id: str):
     if message is None:
         abort(500, "Internal error: event signaled but no result found")
     return Response(message, status=status_code)
+
+@app.route("/health", methods=["GET"])
+async def health():
+    return "OK", 200
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
