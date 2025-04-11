@@ -2,3 +2,5 @@ Sebastian: Kafka setup (Docker Compose (+healthchecks) + Producers/Consumers/Top
 Ioana: protocol flow design, implementation of atomicity with Lua scripts, implementation of async APIs with Quart.
 Bora: Helped with Kafka (producer/consumer) implementation, transaction protocol design + implementation
 Andreas: Helped with Kafka (producer/consumer) implementation, debugging with tests/kafka-ui
+
+We all worked on trying to implement logging and fault tolerance via Undo/Redo logs.
