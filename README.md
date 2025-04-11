@@ -119,6 +119,6 @@ enabling us to return accurate HTTP response codes in real time.
 
 
 ## Instructions
-1. Make sure to install all requirements in requirements.txt
+1. Make sure to install all requirements in requirements.txt. We have included what we used for our services and tests, but if any libraries will be used that are missing from our file, please install them beforehand. 
 2. Compose containers with docker-compose.yml file
 3. Run tests
