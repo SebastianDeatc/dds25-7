@@ -116,3 +116,9 @@ enabling us to return accurate HTTP response codes in real time.
 
 [//]: # ()
 [//]: # (***Requirements:*** You need to have access to kubectl of a k8s cluster.)
+
+
+## Instructions
+1. Make sure to install all requirements in requirements.txt
+2. Compose containers with docker-compose.yml file
+3. Run tests

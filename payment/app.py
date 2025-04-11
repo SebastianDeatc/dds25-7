@@ -84,7 +84,6 @@ async def consume_kafka_events():
 
         event = json.loads(msgpack.decode(msg.value()))
         # logging.info(f'Received message:{event}')
-        # handle_event(event)
         await asyncio.get_running_loop().create_task(handle_event(event))
 
 
