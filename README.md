@@ -26,6 +26,7 @@ enhance parallelism and distribute load more effectively. Additionally, Kafka im
 as messages sent to a topic are persisted and can be consumed upon service restart.
 - We have kept **Redis** as our database as we found it offered fast reads/writes. More importantly, it
 enabled us to implement _atomic operations_ using **Lua scripts**, which enhances _consistency_ in our system.
+Additionally, we have created a **database replica** for each service, which in turn improves _fault tolerance_. 
 - We chose **Quart** as our web framework to support asynchronous APIs, which is critical in the context of a 
 distributed transaction protocol. Unlike Flask, which is synchronous by design, Quart is built on **asyncio**,
 enabling us to return accurate HTTP response codes in real time.

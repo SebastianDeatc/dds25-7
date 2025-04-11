@@ -68,7 +68,17 @@ services:
 
   order-db:
     image: redis:7.2-bookworm
+    container_name: order-db
     command: redis-server --requirepass redis --maxmemory 512mb
+    networks:
+      - kafka-network
+
+  order-db-replica:
+    image: redis:7.2-bookworm
+    container_name: order-db-replica
+    depends_on:
+      - order-db
+    command: redis-server --requirepass redis --slaveof order-db 6379 --masterauth redis
     networks:
       - kafka-network
 
@@ -92,9 +102,20 @@ services:
 
   stock-db:
     image: redis:7.2-bookworm
+    container_name: stock-db
     command: redis-server --requirepass redis --maxmemory 512mb
     networks:
       - kafka-network
+
+  stock-db-replica:
+    image: redis:7.2-bookworm
+    container_name: stock-db-replica
+    depends_on:
+      - stock-db
+    command: redis-server --requirepass redis --slaveof stock-db 6379 --masterauth redis
+    networks:
+      - kafka-network
+
 
   payment-service:
     build: ./payment
@@ -115,7 +136,17 @@ services:
 
   payment-db:
     image: redis:7.2-bookworm
+    container_name: payment-db
     command: redis-server --requirepass redis --maxmemory 512mb
+    networks:
+      - kafka-network
+
+  payment-db-replica:
+    image: redis:7.2-bookworm
+    container_name: payment-db-replica
+    depends_on:
+      - payment-db
+    command: redis-server --requirepass redis --slaveof payment-db 6379 --masterauth redis
     networks:
       - kafka-network
 

@@ -1,4 +1,5 @@
-Sebastian: Kafka setup (Docker Compose (+healthchecks) + Producers/Consumers/Topics setup), transaction protocol design + implementation, readme+diagram, database replication for fault tolerance
+Sebastian: Kafka setup (Docker Compose (+healthchecks) + Producers/Consumers/Topics setup), transaction protocol design + implementation, database replication, readme+diagram
+Dominika: Redis Sentinel setup for all services (primary/replica/sentinel), Docker Compose config with healthchecks and service dependencies, Sentinel-based Redis connection logic, helped with Kafka set up and testing using the consitency-tests
 Ioana: protocol flow design, implementation of atomicity with Lua scripts, implementation of async APIs with Quart.
 Bora: Helped with Kafka (producer/consumer) implementation, transaction protocol design + implementation
 Andreas: Helped with Kafka (producer/consumer) implementation, debugging with tests/kafka-ui
