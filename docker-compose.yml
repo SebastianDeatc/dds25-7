@@ -77,16 +77,12 @@ services:
     build: ./stock
     image: stock:latest
     environment:
-<<<<<<< HEAD
       - PYTHONPATH=/home/flask-app
       - KAFKA_BROKER=kafka:9092
+      - GATEWAY_URL=http://gateway:80
     volumes:
       - ./stock:/home/flask-app
-=======
-      - KAFKA_BROKER=kafka:9092  # Kafka broker environment variable
-      - GATEWAY_URL=http://gateway:80
     # command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
->>>>>>> pausing_consumers
     command: gunicorn -k uvicorn.workers.UvicornWorker -b 0.0.0.0:5000 --timeout 30 --log-level=info app:app
     env_file:
       - env/stock_redis.env
@@ -108,16 +104,12 @@ services:
     build: ./payment
     image: payment:latest
     environment:
-<<<<<<< HEAD
       - PYTHONPATH=/home/flask-app
       - KAFKA_BROKER=kafka:9092
+      - GATEWAY_URL=http://gateway:80
     volumes:
       - ./payment:/home/flask-app
-=======
-      - KAFKA_BROKER=kafka:9092  # Kafka broker environment variable
-      - GATEWAY_URL=http://gateway:80
     # command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
->>>>>>> pausing_consumers
     command: gunicorn -k uvicorn.workers.UvicornWorker -b 0.0.0.0:5000 --timeout 30 --log-level=info app:app
     env_file:
       - env/payment_redis.env
