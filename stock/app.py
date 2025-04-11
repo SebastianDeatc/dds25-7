@@ -84,7 +84,6 @@ async def consume_kafka_events():
 
         event = json.loads(msgpack.decode(msg.value()))
         # logging.info(f'Received message:{event}')
-        # handle_event(event)
         asyncio.get_running_loop().create_task(handle_event(event))
 
 def start_consumer_thread():
@@ -98,30 +97,7 @@ async def handle_event(event):
     event_type = event.get('event_type')
     order_id = event.get('order_id')
     user_id = event.get('user_id')
-    # if event_type == "check_stock":
-    #     items = event.get('items')
-    #     success = True
-    #     for item_id, quantity in items.items():
-    #         if success:
-    #             stock = get_item_from_db(item_id).stock
-    #             available = stock - quantity > 0
-    #             if available:
-    #                 logging.info(f"Locking item: {item_id}")
-    #                 #TODO: lock
-    #             else:
-    #                 logging.info(f"Item {item_id} not available")
-    #                 #TODO: release locks
-    #                 success = False
-    #                 break
-
-    #     check_stock_ack = {
-    #         "event_type": "check_stock_ack",
-    #         "order_id": order_id,
-    #         "user_id": user_id,
-    #         "success": success
-    #     }
-    #     producer.produce('stock-event', key= order_id, value=msgpack.encode(json.dumps(check_stock_ack)))
-    #     producer.flush()
+   
     if event_type == "check_stock":
         items = event.get('items')
         # logging.info(f"items: {items}, type: {type(items)}")
@@ -225,7 +201,6 @@ async def remove_stock(item_id: str, amount: int):
 
 
 if __name__ == '__main__':
-    # Start the consumer as an asyncio task
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:
     gunicorn_logger = logging.getLogger('gunicorn.error')

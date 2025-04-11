@@ -4,5 +4,5 @@ gunicorn==21.2.0
 msgspec==0.18.6
 requests==2.31.0
 confluent-kafka==2.3.0
-quart
-uvicorn
+Quart==0.20.0
+uvicorn==0.34.0
