@@ -12,37 +12,40 @@ from collections import defaultdict
 import time
 import redis
 import requests
+import fcntl  # For Unix-based systems
+# For Windows, use `import msvcrt` instead of `fcntl`
+import tempfile
 
 from msgspec import msgpack, Struct
 from quart import Quart, jsonify, abort, Response
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
-def save_log(new_entry, log_type):
-    log_file = '/logs/log.json'
+def save_log_atomic(new_entry, log_type):
+    log_file = '/logs/order_log.json'
     try:
-        # Try reading the current log data; if the file doesn't exist or is empty, start with an empty list.
-        try:
+        # Read existing logs
+        if os.path.exists(log_file):
             with open(log_file, 'r') as f:
                 logs = json.load(f)
-                if not isinstance(logs, dict):
-                    logs = {}
-        except (FileNotFoundError, json.JSONDecodeError):
-            logs = {}
-            logging.error('FILE NOT FOUND OR SOMETHING')
-        # Append the new log entry
-        if not logs.get(log_type):
-            logs[log_type] = new_entry
         else:
-            logs[log_type] = logs[log_type] | new_entry
-        
-        # Write back the updated log list
-        with open(log_file, 'w') as f:
-            json.dump(logs, f, indent=4)
+            logs = {}
+
+        # Update logs
+        if log_type not in logs:
+            logs[log_type] = {}
+        logs[log_type].update(new_entry)
+
+        # Write to a temporary file
+        with tempfile.NamedTemporaryFile('w', delete=False, dir=os.path.dirname(log_file)) as temp_file:
+            json.dump(logs, temp_file, indent=4)
+            temp_file_name = temp_file.name
+
+        # Replace the original file with the temporary file
+        os.replace(temp_file_name, log_file)
 
     except Exception as e:
         logging.error(f"Error saving log: {e}")
-
 
 logging.basicConfig(level=logging.INFO)
 
@@ -221,7 +224,7 @@ async def handle_event(event):
                 'event': event
             }
         }
-        save_log(payment_commit_log, 'PAYMENT_COMPLETED')
+        save_log_atomic(payment_commit_log, 'PAYMENT_COMPLETED')
 
         check_stock_event = {
             "event_type": "check_stock",
@@ -246,7 +249,7 @@ async def handle_event(event):
                 'event': event
             }
         }
-        save_log(stock_commit_log, 'STOCK_COMPLETED')
+        save_log_atomic(stock_commit_log, 'STOCK_COMPLETED')
         producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(stock_commit_log)))
         producer.flush()
         if success:
@@ -413,7 +416,7 @@ async def checkout(order_id: str):
             'timestamp': time.time(),
         }
     }
-    save_log(checout_start_log, 'START_CHECKOUT')
+    save_log_atomic(checout_start_log, 'START_CHECKOUT')
     order_entry: OrderValue = get_order_from_db(order_id)
 
     async with order_futures_lock:
@@ -455,7 +458,7 @@ async def checkout(order_id: str):
             "timestamp": time.time(),
         }
     }
-    save_log(checkout_commit_log, 'CHECKOUT_COMPLETED')
+    save_log_atomic(checkout_commit_log, 'CHECKOUT_COMPLETED')
     return Response(message, status=status_code)
 
 if __name__ == '__main__':

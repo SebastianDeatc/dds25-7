@@ -20,28 +20,33 @@ from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
+import fcntl  # For Unix-based systems
+# For Windows, use `import msvcrt` instead of `fcntl`
+import tempfile
 
-def save_log(new_entry, log_type):
-    log_file = '/logs/log.json'
+
+def save_log_atomic(new_entry, log_type):
+    log_file = '/logs/payment_log.json'
     try:
-        # Try reading the current log data; if the file doesn't exist or is empty, start with an empty list.
-        try:
+        # Read existing logs
+        if os.path.exists(log_file):
             with open(log_file, 'r') as f:
                 logs = json.load(f)
-                if not isinstance(logs, dict):
-                    logs = {}
-        except (FileNotFoundError, json.JSONDecodeError):
-            logs = {}
-            logging.error('FILE NOT FOUND OR SOMETHING')
-        # Append the new log entry
-        if not logs.get(log_type):
-            logs[log_type] = new_entry
         else:
-            logs[log_type] = logs[log_type] | new_entry
-        
-        # Write back the updated log list
-        with open(log_file, 'w') as f:
-            json.dump(logs, f, indent=4)
+            logs = {}
+
+        # Update logs
+        if log_type not in logs:
+            logs[log_type] = {}
+        logs[log_type].update(new_entry)
+
+        # Write to a temporary file
+        with tempfile.NamedTemporaryFile('w', delete=False, dir=os.path.dirname(log_file)) as temp_file:
+            json.dump(logs, temp_file, indent=4)
+            temp_file_name = temp_file.name
+
+        # Replace the original file with the temporary file
+        os.replace(temp_file_name, log_file)
 
     except Exception as e:
         logging.error(f"Error saving log: {e}")
@@ -163,7 +168,7 @@ async def handle_event(event):
                 "previous_value": previous_value
             }
         }
-        save_log(pre_payment_log, 'PAYMENT_PENDING')
+        save_log_atomic(pre_payment_log, 'PAYMENT_PENDING')
         # producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(payment_commit_log)))
         # producer.flush()
 
