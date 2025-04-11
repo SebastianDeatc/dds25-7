@@ -189,7 +189,7 @@ async def consume_kafka_events():
             continue
 
         event = json.loads(msgpack.decode(msg.value()))
-        #logging.info(f'Received message:{event}')
+        logging.info(f'Received message:{event}')
         asyncio.get_running_loop().create_task(handle_event(event))
 
 def start_consumer_thread():
@@ -306,6 +306,26 @@ async def create_order(user_id: str):
     #logging.info(f"Order created successfully with ID: {key}")
     return jsonify({'order_id': key})
 
+
+@app.route('/consumer/pause', methods=['POST'])
+async def pause_consumer():
+    logging.info("Pausing consumer...")
+    assigned_partitions = consumer.assignment()
+    if not assigned_partitions:
+        return jsonify({"message": "No partitions assigned yet"}), 400
+    consumer.pause(assigned_partitions)
+    logging.info("Consumer paused")
+    return jsonify({"message": "Consumer paused"}), 200
+
+
+@app.route('/consumer/resume', methods=['POST'])
+async def resume_consumer():
+    assigned_partitions = consumer.assignment()
+    if not assigned_partitions:
+        return jsonify({"message": "No partitions assigned yet"}), 400
+    consumer.resume(assigned_partitions)
+    logging.info("Consumer resumed")
+    return jsonify({"message": "Consumer resumed"}), 200
 
 @app.route('/batch_init/<n>/<n_items>/<n_users>/<item_price>', methods=['POST'])
 async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):

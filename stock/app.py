@@ -9,6 +9,7 @@ import threading
 import redis
 import json
 import time
+import requests
 
 from msgspec import msgpack, Struct
 from quart import Quart, jsonify, abort, Response
@@ -56,6 +57,8 @@ def save_log(new_entry):
 logging.basicConfig(level=logging.INFO)
 
 DB_ERROR_STR = "DB error"
+
+GATEWAY_URL = os.environ['GATEWAY_URL']
 
 KAFKA_BROKER = os.environ['KAFKA_BROKER']
 
@@ -203,6 +206,27 @@ def on_startup():
     # resume_order_consumer()
     pass
 
+def pause_order_consumer():
+    try:
+        response = requests.post(f"{GATEWAY_URL}/orders/consumer/pause")
+        if response.status_code == 200:
+            print("Consumer paused successfully")
+        else:
+            print(f"Failed to pause consumer: {response.text}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
+def resume_order_consumer():
+    try:
+        response = requests.post(f"{GATEWAY_URL}/orders/consumer/resume")
+        if response.status_code == 200:
+            print("Consumer paused successfully")
+        else:
+            print(f"Failed to pause consumer: {response.text}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
 @app.post('/item/create/<price>')
 async def create_item(price: int):
     key = str(uuid.uuid4())
@@ -214,6 +238,16 @@ async def create_item(price: int):
         return abort(400, DB_ERROR_STR)
     return jsonify({'item_id': key})
 
+
+@app.post('/pause')
+def pause():
+    pause_order_consumer()
+    return jsonify({"msg": "paused"})
+
+@app.post('/resume')
+def resume():
+    resume_order_consumer()
+    return jsonify({"msg": "resumed"})
 
 @app.post('/batch_init/<n>/<starting_stock>/<item_price>')
 async def batch_init_users(n: int, starting_stock: int, item_price: int):
