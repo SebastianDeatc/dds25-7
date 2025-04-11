@@ -21,34 +21,44 @@ from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
 
-def save_log(new_entry):
-    # current_dir = os.path.dirname(os.path.abspath(__file__))
-    # log_file = os.path.join(current_dir, 'logs.json')
+def save_log(new_entry, log_type):
     log_file = '/logs/log.json'
-
-    logging.info(f'log_file is: {log_file}')
-    # logging.info(f'path to log file is: {current_dir}')
     try:
         # Try reading the current log data; if the file doesn't exist or is empty, start with an empty list.
         try:
             with open(log_file, 'r') as f:
                 logs = json.load(f)
-                logging.info(f'log is: {logs}')
-                if not isinstance(logs, list):
-                    logs = []
+                if not isinstance(logs, dict):
+                    logs = {}
         except (FileNotFoundError, json.JSONDecodeError):
-            logs = []
+            logs = {}
             logging.error('FILE NOT FOUND OR SOMETHING')
         # Append the new log entry
-        logs.append(new_entry)
+        if not logs.get(log_type):
+            logs[log_type] = new_entry
+        else:
+            logs[log_type] = logs[log_type] | new_entry
         
         # Write back the updated log list
         with open(log_file, 'w') as f:
             json.dump(logs, f, indent=4)
-            logging.info(f'logs are: {logs}')
 
     except Exception as e:
         logging.error(f"Error saving log: {e}")
+
+def read_log():
+    log_file = '/logs/log.json'
+    try:
+        with open(log_file, 'r') as f:
+            logs = json.load(f)
+            if not logs:
+                return None
+            else: 
+                pass
+                # logic to get incomplete stuff
+    except Exception as e:
+        logging.error(f'error: {e}')
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -147,14 +157,13 @@ async def handle_event(event):
                 previous_value = previous_value_bytes.decode('utf-8')  # Fallback to UTF-8 decoding
 
         pre_payment_log = {
-            "order_id": order_id,
-            "timestamp": time.time(),
-            "status": "PENDING",
-            "event": event,
-            "previous_value": previous_value,  # Ensure this is JSON-serializable
-            "service": "PAYMENT"
+            order_id: {
+                "timestamp": time.time(),
+                "event": event,
+                "previous_value": previous_value
+            }
         }
-        save_log(pre_payment_log)
+        save_log(pre_payment_log, 'PAYMENT_PENDING')
         # producer.produce('transaction-log', key=order_id, value=msgpack.encode(json.dumps(payment_commit_log)))
         # producer.flush()
 
@@ -200,21 +209,27 @@ async def handle_event(event):
         producer.flush()
 
 def on_startup():
-    # pause_order_consumer()
+    pause_order_consumer()
+    inconsistencies = read_log()
+    logging.info(f'NO INCONSISTENCIES, can resume consumer')
+    if not inconsistencies:
+        resume_order_consumer()
+    else:
+        # handle inconsistencies:
 
-    # go through the log file and find the latest (via timestamp) CHECKOUT_COMPLETED log
+        # go through the log file and find the latest (via timestamp) CHECKOUT_COMPLETED log
 
-    # filter the remaining logs such that only logs with a higher (later) timestamp remain
+        # filter the remaining logs such that only logs with a higher (later) timestamp remain
 
-    # IF there are 0 remaining logs -> no compensating actions needed, return
-    # ELSE -> find the latest log that belongs to the PAYMENT service
-    
-    # IF this log is a PAYMENT_COMPLETED log -> refund the payment and return
-    # ELSE (it has to be PAYMENT_PENDING log) -> using the previous value field in the log json
-        # evaluate if the payment database needs to be corrected and act accordingly, return
+        # IF there are 0 remaining logs -> no compensating actions needed, return
+        # ELSE -> find the latest log that belongs to the PAYMENT service
+        
+        # IF this log is a PAYMENT_COMPLETED log -> refund the payment and return
+        # ELSE (it has to be PAYMENT_PENDING log) -> using the previous value field in the log json
+            # evaluate if the payment database needs to be corrected and act accordingly, return
 
-    # resume_order_consumer()
-    pass
+        # resume_order_consumer()
+        pass
 
 def pause_order_consumer():
     try:
