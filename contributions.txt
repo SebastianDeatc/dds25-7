@@ -1,1 +1,2 @@
 Sebastian: Kafka setup (Docker Compose (+healthchecks) + Producers/Consumers/Topics setup), transaction protocol design + implementation, database replication, readme+diagram
+Dominika: Redis Sentinel setup for all services (primary/replica/sentinel), Docker Compose config with healthchecks and service dependencies, Sentinel-based Redis connection logic, helped with Kafka set up and testing using the consitency-tests
