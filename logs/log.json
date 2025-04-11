@@ -1,0 +1,62 @@
+[
+    {
+        "order_id": "27f709a0-618e-4538-aabe-39a1e78ea542",
+        "timestamp": 1744381044.9983802,
+        "status": "PENDING",
+        "event": {
+            "event_type": "payment",
+            "order_id": "27f709a0-618e-4538-aabe-39a1e78ea542",
+            "user_id": "00ffa60e-5e32-49b4-8459-1eb7bc389795",
+            "amount": 5
+        },
+        "previous_value": {
+            "credit": 100
+        },
+        "service": "PAYMENT"
+    },
+    {
+        "order_id": "27f709a0-618e-4538-aabe-39a1e78ea542",
+        "timestamp": 1744381045.382401,
+        "status": "COMPLETED",
+        "event": {
+            "event_type": "payment_success",
+            "order_id": "27f709a0-618e-4538-aabe-39a1e78ea542",
+            "user_id": "00ffa60e-5e32-49b4-8459-1eb7bc389795",
+            "amount": 5
+        },
+        "service": "PAYMENT"
+    },
+    {
+        "order_id": "27f709a0-618e-4538-aabe-39a1e78ea542",
+        "timestamp": 1744381045.9748101,
+        "status": "PENDING",
+        "event": {
+            "event_type": "check_stock",
+            "order_id": "27f709a0-618e-4538-aabe-39a1e78ea542",
+            "user_id": "00ffa60e-5e32-49b4-8459-1eb7bc389795",
+            "items": {
+                "9b2027be-36cb-4ca9-b320-7bc28ccc59dc": 1
+            }
+        },
+        "previous_value": null,
+        "service": "STOCK"
+    },
+    {
+        "order_id": "27f709a0-618e-4538-aabe-39a1e78ea542",
+        "timestamp": 1744381046.171839,
+        "status": "COMPLETED",
+        "event": {
+            "event_type": "check_stock_ack",
+            "order_id": "27f709a0-618e-4538-aabe-39a1e78ea542",
+            "user_id": "00ffa60e-5e32-49b4-8459-1eb7bc389795",
+            "success": true
+        },
+        "service": "STOCK"
+    },
+    {
+        "order_id": "27f709a0-618e-4538-aabe-39a1e78ea542",
+        "timestamp": 1744381047.9977906,
+        "status": "CHECKOUT_COMPLETED",
+        "service": "ORDER"
+    }
+]

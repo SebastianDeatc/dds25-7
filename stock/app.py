@@ -18,20 +18,13 @@ from werkzeug.exceptions import HTTPException
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
-# from .log import save_log
-
-
-# # Insert the project root directory at the beginning of sys.path if it's not already there.
-# if project_root not in sys.path:
-#     sys.path.insert(0, project_root)
-
-# from log import save_log
-
 def save_log(new_entry):
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    log_file = os.path.join(current_dir, 'logs.json')
+    # current_dir = os.path.dirname(os.path.abspath(__file__))
+    # log_file = os.path.join(current_dir, 'logs.json')
+    log_file = '/logs/log.json'
+
     logging.info(f'log_file is: {log_file}')
-    logging.info(f'path to log file is: {current_dir}')
+    # logging.info(f'path to log file is: {current_dir}')
     try:
         # Try reading the current log data; if the file doesn't exist or is empty, start with an empty list.
         try:
