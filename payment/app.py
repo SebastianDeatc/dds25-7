@@ -5,11 +5,8 @@ import os
 import atexit
 import sys
 import uuid
-<<<<<<< HEAD
 import time
-=======
 import requests
->>>>>>> pausing_consumers
 
 from quart import Quart, jsonify, abort, Response
 
